@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — application settings store
+   FS Workbench — application settings store
    File:     js/settings.js
-   Rev:      0.10.0
+   Rev:      0.13.0
    Updated:  2026-07-09
    Requires: core.js
    --------------------------------------------------------------
@@ -10,10 +10,10 @@
    details and logo, report themes, report layout, information sections
    and the user's custom (non-SISTEMA) component library.
 
-   Backed by the BroSafe data folder (chosen once, handle cached in
+   Backed by the data folder (chosen once, handle cached in
    IndexedDB) — NOT by the project folder and NOT by localStorage.
 
-       <BroSafe data folder>/
+       <data folder>/
          settings.json
          assets/logo.png
          themes/<themeId>.json
@@ -26,6 +26,11 @@
    one drag. deleteSection() removes the folder, so assets can never
    be orphaned.
 
+   0.11.0 — a handle to a DELETED folder still reports permission 'granted',
+          so the app attached it, reported status 'saved', and every write
+          failed silently. Both restore and reconnect now probe the directory
+          and return 'gone', discarding the stale handle.
+   0.11.1 — SH.IDB read lazily (same fix as store.js v0.9.3).
    0.10.0 — restoreDataFolder() no longer calls requestPermission(): that needs
           a live user gesture, so at boot it could only fail. It now returns
           'granted' | 'prompt' | 'none', and reconnectDataFolder() re-grants
@@ -60,7 +65,9 @@
      Constants
      ============================================================== */
 
-  var SCHEMA = 'brosafe.settings/2';
+  var SCHEMA = 'fsworkbench.settings/2';
+  /* Schemas written before the rename, at the same structural version. */
+  var LEGACY_SCHEMAS = ['brosafe.settings/2'];
 
   /* Exactly these nine, lowercase, hyphenated. Used as folder names. */
   var SECTION_CATEGORIES = [
@@ -70,7 +77,11 @@
   ];
 
   var SECTIONS_ROOT = 'sections';
-  var IDB_NAME = 'brosafe', IDB_STORE = 'handles', IDB_KEY = 'dataDir';
+  /* Lazy helpers — same reason as store.js: a top-level SH.IDB read throws
+     if settings.js ever executes before core.js. */
+  function idbName()  { return (SH.IDB && SH.IDB.name)  || 'fs-workbench'; }
+  function idbStore() { return (SH.IDB && SH.IDB.store) || 'handles'; }
+  var IDB_KEY = 'dataDir';
 
   var DEFAULTS = {
     schema: SCHEMA,
@@ -126,13 +137,13 @@
   /* ---- IndexedDB: cache the directory handle between launches ---- */
   function idb(fn) {
     return new Promise(function (resolve, reject) {
-      var req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = function () { req.result.createObjectStore(IDB_STORE); };
+      var req = indexedDB.open(idbName(), 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(idbStore()); };
       req.onerror = function () { reject(req.error); };
       req.onsuccess = function () {
         var db = req.result;
-        var tx = db.transaction(IDB_STORE, 'readwrite');
-        var r = fn(tx.objectStore(IDB_STORE));
+        var tx = db.transaction(idbStore(), 'readwrite');
+        var r = fn(tx.objectStore(idbStore()));
         tx.oncomplete = function () { db.close(); resolve(r && r.result); };
         tx.onerror = function () { db.close(); reject(tx.error); };
       };
@@ -149,7 +160,7 @@
   SH.settings = {
 
     data: null,             // loaded settings object
-    dataDirHandle: null,    // FileSystemDirectoryHandle for the BroSafe data folder
+    dataDirHandle: null,    // FileSystemDirectoryHandle for the data folder
     loaded: false,
     dirty: false,
     saving: false,
@@ -235,7 +246,7 @@
       if (!this.dataDirHandle) return;    // stays dirty; status() reports 'memory'
       clearTimeout(this._saveTimer);
       this._saveTimer = setTimeout(function () {
-        self.save().catch(function (e) { console.warn('BroSafe: settings not saved —', e); });
+        self.save().catch(function (e) { console.warn(SH.APP_NAME + ': settings not saved —', e); });
       }, 400);
     },
 
@@ -247,11 +258,11 @@
       if (!window.showDirectoryPicker) {
         throw new Error('This browser cannot open folders. Use Microsoft Edge or Google Chrome.');
       }
-      var h = await window.showDirectoryPicker({ mode: 'readwrite', id: 'brosafe-data' });
+      var h = await window.showDirectoryPicker({ mode: 'readwrite', id: 'fsw-data' });
       this.dataDirHandle = h;
       this._cachedHandle = h;
       this._perm = 'granted';
-      try { await idbPut(h); } catch (e) { console.warn('BroSafe: handle not cached —', e); }
+      try { await idbPut(h); } catch (e) { console.warn(SH.APP_NAME + ': handle not cached —', e); }
       await this.load();
       return h;
     },
@@ -262,6 +273,8 @@
          'granted'  re-attached and loaded
          'prompt'   a handle is cached but Chrome dropped the grant — the app
                     must offer a ONE-CLICK reconnect, not a folder picker
+         'gone'     the remembered folder has been deleted or moved; the stale
+                    handle is discarded
          'none'     nothing cached; this machine has never chosen a folder
 
        Chrome does drop persisted readwrite grants, so 'prompt' is a normal
@@ -279,10 +292,30 @@
 
       if (perm !== 'granted') { this._perm = 'prompt'; this._emitStatus(); return 'prompt'; }
 
+      /* Permission survives the folder. A handle to a deleted folder still
+         reports 'granted', so attaching it without a probe leaves
+         hasDataFolder() true and status() reporting 'saved' while every write
+         fails. Touch the directory before trusting it. */
+      if (!(await probe(h))) return this._forgetDeadHandle();
+
       this.dataDirHandle = h;
       this._perm = 'granted';
       await this.load();
       return 'granted';
+    },
+
+    /* The remembered folder is not there any more (moved, renamed, deleted,
+       or an unmounted network drive). Drop the stale handle so the app asks
+       for a new folder instead of pretending to save. */
+    _forgetDeadHandle: async function () {
+      this.dataDirHandle = null;
+      this._cachedHandle = null;
+      this._perm = 'none';
+      this.dirty = false;
+      try { await idbDel(); } catch (e) { /* nothing to remove */ }
+      console.warn(SH.APP_NAME + ': the remembered data folder no longer exists. Choose one in Settings \u2192 Data & Storage.');
+      this._emitStatus();
+      return 'gone';
     },
 
     /* Call from a CLICK. Re-grants the cached handle without a folder picker,
@@ -294,6 +327,7 @@
 
       var perm = await h.requestPermission({ mode: 'readwrite' });
       if (perm !== 'granted') { this._perm = 'prompt'; this._emitStatus(); return 'denied'; }
+      if (!(await probe(h))) return this._forgetDeadHandle();
 
       this.dataDirHandle = h;
       this._perm = 'granted';
@@ -370,13 +404,13 @@
     writeJSON: function (relPath, obj) {
       return this._writeJSONStrict(relPath, obj)
         .then(function () { return true; })
-        .catch(function (e) { console.warn('BroSafe: could not write ' + relPath + ' —', e); return false; });
+        .catch(function (e) { console.warn(SH.APP_NAME + ': could not write ' + relPath + ' —', e); return false; });
     },
 
     deleteFile: function (relPath) {
       return this._deleteStrict(relPath, false)
         .then(function () { return true; })
-        .catch(function (e) { console.warn('BroSafe: could not delete ' + relPath + ' —', e); return false; });
+        .catch(function (e) { console.warn(SH.APP_NAME + ': could not delete ' + relPath + ' —', e); return false; });
     },
 
     readJSON: async function (relPath) {
@@ -484,14 +518,14 @@
             // A scan-based store has no index to enforce uniqueness, and a
             // hand-copied folder can duplicate an id. Keep the first, warn.
             if (seen[sec.id]) {
-              console.warn('BroSafe: duplicate section id "' + sec.id + '" in ' +
+              console.warn(SH.APP_NAME + ': duplicate section id "' + sec.id + '" in ' +
                 seen[sec.id] + ' and ' + cat + '. Using ' + seen[sec.id] + '.');
               continue;
             }
             seen[sec.id] = cat;
             this.sectionsCache.push(sec);
           } catch (e) {
-            console.warn('BroSafe: skipping ' + cat + '/' + entry.name + ' —', e.message);
+            console.warn(SH.APP_NAME + ': skipping ' + cat + '/' + entry.name + ' —', e.message);
           }
         }
       }
@@ -511,7 +545,7 @@
       }
 
       var sec = clone(section);
-      sec.schema = 'brosafe.section/1';
+      sec.schema = 'fsworkbench.section/1';
       sec.source = 'user';
       sec.rev = sec.rev || 1;
       sec.updated = sec.updated || today();
@@ -773,6 +807,16 @@
      Module-private helpers
      ============================================================== */
 
+  /* Can we actually reach this directory? A granted permission says nothing
+     about the folder still existing. */
+  async function probe(handle) {
+    try {
+      // eslint-disable-next-line no-unused-vars
+      for await (var _e of handle.values()) break;
+      return true;
+    } catch (e) { return false; }
+  }
+
   function sectionJsonPath(category, id) {
     return [SECTIONS_ROOT, category, id, 'section.json'].join('/');
   }
@@ -823,13 +867,15 @@
      It now lives in section folders on disk. Drop the dead key rather than
      leave a field that looks live and is not. */
   function migrate(s) {
+    /* Already current, or current-but-pre-rename: only the string changes. */
     if (s.schema === SCHEMA) return s;
+    if (LEGACY_SCHEMAS.indexOf(s.schema) !== -1) { s.schema = SCHEMA; return s; }
     if (s.informationSections) {
       var dropped = Object.keys(s.informationSections).filter(function (k) {
         return s.informationSections[k] && s.informationSections[k].overrides;
       });
       if (dropped.length) {
-        console.warn('BroSafe: settings migrated to ' + SCHEMA +
+        console.warn(SH.APP_NAME + ': settings migrated to ' + SCHEMA +
           '. Legacy inline section overrides dropped for: ' + dropped.join(', ') +
           '. Recreate them as sections in Settings → Sections.');
       }
