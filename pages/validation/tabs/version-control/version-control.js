@@ -1,11 +1,12 @@
 /* ==============================================================
-   BroSafe — Validation Report › Version Control
+   FS Workbench — Validation › Version Control
    File:     pages/validation/tabs/version-control/version-control.js
-   Rev:      0.4.0
+   Rev:      0.1.0
    Updated:  2026-07-09
    Requires: core.js, doc-tabs.js
    --------------------------------------------------------------
-   Tab module. mount(host, ctx) renders into host only.
+   Shared tab — delegates entirely to SH.docTabs.
    ============================================================== */
-/* Shared implementation — see js/doc-tabs.js */
-SH.registerTab('validation', 'version-control', SH.docTabs.versionControl('validation', { title: 'Validation Report' }));
+SH.registerTab('validation', 'version-control', SH.docTabs.versionControl('validation', {
+  title: 'Validation'
+}));
