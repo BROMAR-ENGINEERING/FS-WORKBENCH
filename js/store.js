@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — project store
+   FS Workbench — project store
    File:     js/store.js
-   Rev:      0.9.1
+   Rev:      0.13.0
    Updated:  2026-07-09
    Requires: core.js
    --------------------------------------------------------------
@@ -30,6 +30,9 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.9.2 — MINOR schema: project.validation.method ('comprehensive'|'simplified'|null).
+          Added _normalize() — called on every project open to back-fill keys
+          added after a project was first created. blankProject() updated.
    0.9.1 — save() now emits `project:status`, not `project:changed`. Typing one
           character used to fire `project:changed` three times: once for the
           edit, then twice more when the debounced save started and finished.
@@ -54,8 +57,12 @@
    ============================================================== */
 (function (SH) {
 
-  var SCHEMA   = 'brosafe.project/1';
-  var IDB_NAME = 'brosafe', IDB_STORE = 'handles';
+  var SCHEMA   = 'fsworkbench.project/1';
+  /* Files written before the rename. Read them, warn about nothing, and
+     upgrade the string on the next save. A renamed schema that rejects its
+     own old files is a data-loss bug wearing a cosmetics costume. */
+  var LEGACY_SCHEMAS = ['brosafe.project/1'];
+  var IDB_NAME = SH.IDB.name, IDB_STORE = SH.IDB.store;
   var IDB_KEY  = 'projectRoot';      // the projects root directory handle
   var IDB_RECENTS = 'recents';       // [{id, handle, …labels}] — see listRecents()
   var MAX_RECENTS = 10;
@@ -124,6 +131,7 @@
       involvedParties: [],       // RACI
       job: { jobNumber: '', purchaseOrders: [], costCode: '' },
       sfs: [],                   // manifest; full data in sf/*.json
+      validation: { method: null }, // 'comprehensive' | 'simplified' | null
       lists: {}
     };
   }
@@ -171,14 +179,14 @@
       if (!window.showDirectoryPicker) {
         return Promise.reject(new Error('This browser cannot open folders. Use Microsoft Edge or Google Chrome.'));
       }
-      return window.showDirectoryPicker({ mode: 'readwrite', id: 'brosafe-projects' });
+      return window.showDirectoryPicker({ mode: 'readwrite', id: 'fsw-projects' });
     },
 
     /* Adopt a handle as the projects root. remember:false skips the cache. */
     useRoot: async function (handle, remember) {
       this.rootHandle = handle || null;
       if (handle && remember !== false) {
-        try { await idbPut(handle); } catch (e) { console.warn('BroSafe: root handle not cached —', e); }
+        try { await idbPut(handle); } catch (e) { console.warn(SH.APP_NAME + ': root handle not cached —', e); }
       }
       SH.bus.emit('project:root', this.rootHandle);
       return this.rootHandle;
@@ -293,19 +301,28 @@
         if (!window.showDirectoryPicker) {
           throw new Error('This browser cannot open folders. Use Microsoft Edge or Google Chrome.');
         }
-        dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'brosafe-project' });
+        dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'fsw-project' });
       }
       return this._openFrom(dir, dir.name);
+    },
+
+    /* Ensure keys added in later schema revisions exist on projects written
+       by an older version. Add only scalar/null defaults here — never
+       overwrite a value the user set. Arrays cannot use fill(). */
+    _normalize: function (p) {
+      if (!p.validation) p.validation = {};
+      if (p.validation.method === undefined) p.validation.method = null;
+      return p;
     },
 
     _openFrom: async function (dir, folder) {
       var fh;
       try { fh = await dir.getFileHandle('project.json', { create: false }); }
-      catch (e) { throw new Error('"' + folder + '" is not a BroSafe project (no project.json).'); }
+      catch (e) { throw new Error('"' + folder + '" is not a ' + SH.APP_NAME + ' project (no project.json).'); }
 
-      var p = JSON.parse(await (await fh.getFile()).text());
-      if (p.schema && p.schema !== SCHEMA) {
-        console.warn('BroSafe: project schema ' + p.schema + ', expected ' + SCHEMA);
+      var p = this._normalize(JSON.parse(await (await fh.getFile()).text()));
+      if (p.schema && p.schema !== SCHEMA && LEGACY_SCHEMAS.indexOf(p.schema) === -1) {
+        console.warn(SH.APP_NAME + ': project schema ' + p.schema + ', expected ' + SCHEMA);
       }
       this.dirHandle = dir;
       this.folderName = folder;
@@ -363,7 +380,7 @@
       list.unshift(entry);
       if (list.length > MAX_RECENTS) list.length = MAX_RECENTS;
       try { await idbPut(list, IDB_RECENTS); }
-      catch (e) { console.warn('BroSafe: recent projects not cached —', e); }
+      catch (e) { console.warn(SH.APP_NAME + ': recent projects not cached —', e); }
     },
 
     forgetRecent: async function (id) {
@@ -392,7 +409,7 @@
       var perm = await rec.handle.queryPermission({ mode: 'readwrite' });
       if (perm !== 'granted') perm = await rec.handle.requestPermission({ mode: 'readwrite' });
       if (perm !== 'granted') {
-        var e1 = new Error('BroSafe was not given permission to open that folder.');
+        var e1 = new Error(SH.APP_NAME + ' was not given permission to open that folder.');
         e1.code = 'DENIED'; throw e1;
       }
 
@@ -460,7 +477,7 @@
       if (!this.dirHandle) return;                 // in-memory project
       clearTimeout(this._saveTimer);
       this._saveTimer = setTimeout(function () {
-        self.save().catch(function (e) { console.warn('BroSafe: project not saved —', e); });
+        self.save().catch(function (e) { console.warn(SH.APP_NAME + ': project not saved —', e); });
       }, 600);
     },
 
