@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — left-menu manifest + boot
+   FS Workbench — left-menu manifest + boot
    File:     js/app.js
-   Rev:      0.7.1
+   Rev:      0.13.0
    Updated:  2026-07-09
    Requires: core.js, loader.js, store.js, settings.js, theme.js,
              content.js, doc-tabs.js, router.js
@@ -13,8 +13,8 @@
 
    0.9.0 — Open project now lists RECENT projects first (one click, no file
           picker), then the projects inside the current root. The two
-          confusing buttons are relabelled: "Set projects folder\u2026" picks
-          the folder that CONTAINS projects; "Open a project folder\u2026"
+          confusing buttons are relabelled: "Set projects folder…" picks
+          the folder that CONTAINS projects; "Open a project folder…"
           picks a folder that IS a project.
    0.8.1 — New project no longer silently reuses the last folder. The dialog
           has a Location row: "Choose…" opens the picker, and a shortcut
@@ -169,7 +169,7 @@
   }
 
   /* ==============================================================
-     BroSafe data folder — one app-level prompt, never per tab
+     data folder — one app-level prompt, never per tab
 
      Chrome drops a persisted readwrite grant. The handle survives in
      IndexedDB, so re-attaching is one click — not a folder picker. Showing
@@ -196,7 +196,7 @@
         SH.settings.chooseDataFolder()
           .then(function () { hideMissing(); })
           .catch(function (e) { if (e && e.name !== 'AbortError') err(e.message); });
-      } }, 'Choose data folder\u2026')
+      } }, 'Choose data folder…')
     );
     var content = document.getElementById('content');
     content.parentNode.insertBefore(missingBar, content);
@@ -252,6 +252,10 @@
     back.addEventListener('click', function (e) { if (e.target === back) close(); });
     return close;
   }
+
+  /* Exposed on SH so page controllers and tab files can open modals.
+     Tabs cannot reach private app.js functions. */
+  SH.modal = function (title, bodyEl, actions) { return modal(title, bodyEl, actions); };
 
   function field(label, id, placeholder) {
     return SH.el('div', { class: 'field' },
@@ -413,7 +417,7 @@
         if (!SH.store.hasRoot()) {
           if (!recents.length) {
             body.appendChild(SH.el('p', { class: 'hint' },
-              'Open a project folder, or point BroSafe at the folder that holds your projects.'));
+              'Open a project folder, or point ' + SH.APP_NAME + ' at the folder that holds your projects.'));
           }
           return;
         }
@@ -455,13 +459,13 @@
 
     closeIt = modal('Open project', body, [
       { label: 'Cancel', ghost: true, onClick: function (c) { c(); } },
-      { label: 'Set projects folder\u2026', ghost: true, title:
+      { label: 'Set projects folder…', ghost: true, title:
           'The folder that CONTAINS your projects', onClick: function (c) {
           SH.store.pickRoot().then(function (h) {
             return SH.store.useRoot(h).then(refresh);
           }).catch(function (e) { if (e && e.name !== 'AbortError') err(e.message); });
         } },
-      { label: 'Open a project folder\u2026', onClick: function (c) {
+      { label: 'Open a project folder…', onClick: function (c) {
           SH.store.openProjectFolder()
             .then(function () { c(); })
             .catch(function (e) { if (e && e.name !== 'AbortError') { c(); err(e.message); } });
@@ -537,7 +541,7 @@
         '<div class="stub error" style="margin-top:24px">' +
         '<h2>' + SH.APP_NAME + ' cannot start</h2>' +
         '<ul>' + list + '</ul>' +
-        '<p>Every BroSafe file names itself on line 3 of its header ' +
+        '<p>Every ' + SH.APP_NAME + ' file names itself on line 3 of its header ' +
         '(<code>File:     js/&lt;name&gt;.js</code>). Check each one matches its filename, then ' +
         'hard-refresh with <b>Ctrl+Shift+R</b>.</p>' +
         '<p>Script order in <code>index.html</code>: core, loader, store, settings, theme, ' +
@@ -556,21 +560,26 @@
     SH.bus.on('settings:status', function () { paintDataFolder(); });
     SH.router.start();
 
-    /* Re-attach the BroSafe data folder. The handle is cached, so this is a
+    /* Re-attach the data folder. The handle is cached, so this is a
        once-ever act on a machine — unless Chrome drops the grant, in which
        case we offer a one-click reconnect rather than a picker. */
-    SH.settings.restoreDataFolder().then(function (perm) {
-      paintDataFolder(perm);
-      if (perm === 'granted') updateHeader();
-    }).catch(function (e) { console.warn(SH.APP_NAME + ': data folder not restored —', e); });
+    /* Move any handles out of the pre-rename database FIRST. Both restores
+       below read the new one, so this has to finish before either runs. */
+    SH.migrateHandleDb().then(function () {
 
-    /* Silently re-attach the projects folder if the browser still grants
-       it. If not, the first New/Open click will ask. */
-    if (SH.store.restoreRoot) {
-      SH.store.restoreRoot().then(function (okRoot) {
-        if (okRoot) updateHeader();
-      }).catch(function () { /* no cached handle */ });
-    }
+      SH.settings.restoreDataFolder().then(function (perm) {
+        paintDataFolder(perm);
+        if (perm === 'granted') updateHeader();
+      }).catch(function (e) { console.warn(SH.APP_NAME + ': data folder not restored —', e); });
+
+      /* Silently re-attach the projects folder if the browser still grants
+         it. If not, the first New/Open click will ask. */
+      if (SH.store.restoreRoot) {
+        SH.store.restoreRoot().then(function (okRoot) {
+          if (okRoot) updateHeader();
+        }).catch(function () { /* no cached handle */ });
+      }
+    });
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', SH.boot);
