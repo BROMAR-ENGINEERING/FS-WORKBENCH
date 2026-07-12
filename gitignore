@@ -1,0 +1,71 @@
+# =====================================================
+# FS Workbench — .gitignore
+# =====================================================
+
+# --------------------------------------------------
+# DATA — never goes in the repo
+# The data folder (company details, themes, sections,
+# libraries, custom components) and project output
+# folders are chosen at runtime via the folder picker.
+# They live wherever the user puts them — not here.
+# --------------------------------------------------
+
+# If the user ever accidentally points the data folder
+# or projects folder at the repo root, these patterns
+# prevent committing real data:
+settings.json
+themes/
+sections/
+libraries/
+components.json
+
+# Installed SISTEMA XML libraries (large, per-user)
+*.xml
+
+# User assets (logo etc)
+assets/logo.*
+assets/logo/
+
+# Project output files
+project.json
+sf/
+risk/
+loto/
+exports/
+
+# --------------------------------------------------
+# DEVELOPMENT
+# --------------------------------------------------
+
+# Node (used only for offline font download + tests)
+node_modules/
+fonttmp/
+package-lock.json
+
+# Claude Code personal overrides (never commit these)
+CLAUDE.local.md
+
+# --------------------------------------------------
+# OS / EDITOR
+# --------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+.vscode/
+.idea/
+
+# --------------------------------------------------
+# WHAT IS COMMITTED (everything else):
+#   index.html
+#   js/*.js          core scripts
+#   css/app.css      css/fonts.css
+#   assets/          brand SVGs + app icon
+#   pages/           page controllers + tab modules
+#   content/         shipped section seeds
+#   docs/            all documentation
+#   tools/           shortcut generator
+#   test/            Node test harnesses
+#   CLAUDE.md        Claude Code instructions
+#   README.md        CHANGELOG.md
+# --------------------------------------------------
