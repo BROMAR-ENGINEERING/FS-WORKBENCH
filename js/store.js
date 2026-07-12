@@ -30,6 +30,10 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.9.3 — SH.IDB is now read lazily inside idb() rather than at IIFE scope.
+          A top-level SH.IDB.name reference threw if store.js ever loaded before
+          core.js, leaving SH.store unassigned and the boot guard reporting
+          'not loaded'.
    0.9.2 — MINOR schema: project.validation.method ('comprehensive'|'simplified'|null).
           Added _normalize() — called on every project open to back-fill keys
           added after a project was first created. blankProject() updated.
@@ -62,7 +66,12 @@
      upgrade the string on the next save. A renamed schema that rejects its
      own old files is a data-loss bug wearing a cosmetics costume. */
   var LEGACY_SCHEMAS = ['brosafe.project/1'];
-  var IDB_NAME = SH.IDB.name, IDB_STORE = SH.IDB.store;
+  /* Read SH.IDB lazily so a load-order mishap cannot throw at IIFE scope.
+     If store.js ever executes before core.js, a top-level SH.IDB.name
+     reference throws, SH.store is never assigned, and the boot guard
+     reports 'not loaded' with no obvious cause. */
+  function idbName()  { return (SH.IDB && SH.IDB.name)  || 'fs-workbench'; }
+  function idbStore() { return (SH.IDB && SH.IDB.store) || 'handles'; }
   var IDB_KEY  = 'projectRoot';      // the projects root directory handle
   var IDB_RECENTS = 'recents';       // [{id, handle, …labels}] — see listRecents()
   var MAX_RECENTS = 10;
@@ -73,13 +82,13 @@
      file://; if a third store ever needs them, promote to core.js. */
   function idb(fn) {
     return new Promise(function (resolve, reject) {
-      var req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = function () { req.result.createObjectStore(IDB_STORE); };
+      var req = indexedDB.open(idbName(), 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(idbStore()); };
       req.onerror = function () { reject(req.error); };
       req.onsuccess = function () {
         var db = req.result;
-        var tx = db.transaction(IDB_STORE, 'readwrite');
-        var r = fn(tx.objectStore(IDB_STORE));
+        var tx = db.transaction(idbStore(), 'readwrite');
+        var r = fn(tx.objectStore(idbStore()));
         tx.oncomplete = function () { db.close(); resolve(r && r.result); };
         tx.onerror = function () { db.close(); reject(tx.error); };
       };
