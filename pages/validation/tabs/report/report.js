@@ -1,11 +1,12 @@
 /* ==============================================================
-   BroSafe — Validation Report › Report
+   FS Workbench — Validation › Report
    File:     pages/validation/tabs/report/report.js
-   Rev:      0.4.0
+   Rev:      0.1.0
    Updated:  2026-07-09
    Requires: core.js, doc-tabs.js
    --------------------------------------------------------------
-   Tab module. mount(host, ctx) renders into host only.
+   Shared tab — delegates entirely to SH.docTabs.
    ============================================================== */
-/* Shared implementation — see js/doc-tabs.js */
-SH.registerTab('validation', 'report', SH.docTabs.report('validation', { title: 'Validation Report' }));
+SH.registerTab('validation', 'report', SH.docTabs.report('validation', {
+  title: 'Validation'
+}));
