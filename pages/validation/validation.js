@@ -1,7 +1,7 @@
 /* ==============================================================
    FS Workbench — Validation page controller
    File:     pages/validation/validation.js
-   Rev:      0.5.0
+   Rev:      0.5.1
    Updated:  2026-07-09
    Requires: core.js, store.js (SH.store.get / SH.store.set)
    --------------------------------------------------------------
@@ -42,20 +42,23 @@ SH.registerPage('validation', (function () {
     title: 'Validation',
 
     /* internal state */
-    _host:   null,
-    _bar:    null,
-    _sub:    null,
-    _hosts:  null,
-    _shown:  null,
-    _method: null,   /* mirrors project.validation.method */
+    _host:       null,
+    _bar:        null,
+    _sub:        null,
+    _hosts:      null,
+    _shown:      null,
+    _method:     null,   /* mirrors project.validation.method */
+    _hasProject: false,  /* tracks prior project state so null==null can't suppress redraws */
     _onProject: null,
 
     /* ---- lifecycle ------------------------------------------------ */
 
     mount: function (host, ctx) {
-      this._host   = host;
-      this._hosts  = {};
-      this._method = null;
+      this._host       = host;
+      this._hosts      = {};
+      this._method     = null;
+      this._hasProject = false;
+      this._view       = 'init';
 
       var self = this;
       this._onProject = function () { self._sync(); };
@@ -131,19 +134,31 @@ SH.registerPage('validation', (function () {
 
     /* ---- internal helpers ----------------------------------------- */
 
-    /* Re-read the method from the store and redraw if it has changed. */
+    /* Re-read the method from the store and redraw if it has changed.
+       IMPORTANT: we track _hasProject separately from _method because both
+       can be null — if we only compared method===this._method we would skip
+       the transition from "no project shown" to "project open, method not yet
+       chosen" (null===null returns early, page stays on the no-project view). */
     _sync: function () {
-      if (!SH.store.hasProject()) {
-        this._showNoProject();
+      var nowHas = SH.store.hasProject();
+      if (!nowHas) {
+        /* Show no-project on initial render OR when transitioning from open. */
+        if (this._hasProject || this._method !== null || this._view === 'init') {
+          this._showNoProject();
+        }
+        this._hasProject = false; this._method = null;
         return;
       }
       var method = SH.store.get('validation.method', null);
-      if (method === this._method) return;   /* nothing changed */
-      this._method = method;
+      /* Only skip if BOTH the project state and the method are unchanged. */
+      if (nowHas === this._hasProject && method === this._method) return;
+      this._hasProject = nowHas;
+      this._method     = method;
       method ? this._buildTabs(method) : this._buildSelector();
     },
 
     _showNoProject: function () {
+      this._view = 'no-project';
       this._method = null;
       this._host.innerHTML = '';
       this._bar = null; this._sub = null; this._hosts = {};
@@ -157,6 +172,7 @@ SH.registerPage('validation', (function () {
        Method selector
        ---------------------------------------------------------------- */
     _buildSelector: function () {
+      this._view = 'selector';
       this._host.innerHTML = '';
       this._bar = null; this._sub = null; this._hosts = {};
 
@@ -229,6 +245,7 @@ SH.registerPage('validation', (function () {
        Tab view
        ---------------------------------------------------------------- */
     _buildTabs: function (method) {
+      this._view = 'tabs';
       var tabs = TABS[method] || [];
       this._host.innerHTML = '';
       this._hosts = {};
