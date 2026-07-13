@@ -30,6 +30,9 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.3 — MINOR schema: sfs[].plr back-filled to
+             { mode:'direct', value:null, s:null, f:null, p:null }
+             only when absent. Existing plr objects untouched.
    0.10.2 — MINOR schema: project.lists.deviceTypes back-filled to the
              default six-type list. Existing arrays are left untouched
              so user-added types survive.
@@ -366,13 +369,19 @@
         p.lists.deviceTypes = DEFAULT_DEVICE_TYPES.slice();
       }
 
-      /* per-SF device assignments (0.14.0) — a manifest entry may pre-date
-         these fields, in which case we back-fill each individually. */
+      /* per-SF device assignments (0.14.0) and PLr object (0.14.4) —
+         each field is back-filled individually so a manifest entry that
+         has some fields (e.g. inputs but no plr) picks up only what it
+         is missing. Existing values are never overwritten. */
       if (Array.isArray(p.sfs)) {
         p.sfs.forEach(function (sf) {
           if (!Array.isArray(sf.inputs))  sf.inputs  = [];
           if (!Array.isArray(sf.logic))   sf.logic   = [];
           if (!Array.isArray(sf.outputs)) sf.outputs = [];
+          if (!sf.plr || typeof sf.plr !== 'object') {
+            sf.plr = { mode: 'direct', value: null,
+                       s: null, f: null, p: null };
+          }
         });
       }
 
