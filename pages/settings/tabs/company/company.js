@@ -1,16 +1,16 @@
 /* ==============================================================
-   BroSafe — Settings › Company
+   FS Workbench — Settings › Company
    File:     pages/settings/tabs/company/company.js
-   Rev:      0.8.0
+   Rev:      0.9.0
    Updated:  2026-07-09
-   Requires: core.js, settings.js (>= 0.10.0)
+   Requires: core.js (>= 0.13.1 for SH.modal, SH.APP_NAME), settings.js (>= 0.10.0)
    --------------------------------------------------------------
    REFERENCE IMPLEMENTATION — copy this pattern for new tabs.
    Shows: scoped CSS, SH.el rendering, reading/writing SH.settings,
    the mount/onShow/unmount lifecycle, and cleaning up listeners.
 
-   The company here is the safety professional USING BroSafe, not the
-   client. It is stored in the BroSafe data folder, never in a project.
+   The company here is the safety professional USING FS Workbench, not the
+   client. It is stored in the data folder, never in a project.
 
    These details are one-time setup. The tab is READ-ONLY until Edit is
    pressed; Save writes every changed path in one pass, Cancel discards.
@@ -24,9 +24,10 @@
    Lifecycle (core v0.6.x): mount() runs ONCE. onShow() re-reads state,
    unless an edit is in progress. unmount() runs only on page teardown.
 
+   0.9.0 — FS Workbench rebrand: product name via SH.APP_NAME, not a literal.
+          Confirmations use SH.modal instead of window.confirm.
    0.8.0 — settings.js v0.10.0: read status() instead of feature-detecting
-          the data folder; save chip bound to settings:status; removed this
-          tab's "Choose data folder…" button.
+          the data folder; save chip bound to settings:status.
    0.7.0 — read-only view with Edit / Save / Cancel. One write on Save.
    0.6.0 — status chip no longer claims "Saved" with no data folder open.
    0.5.0 — v0.6.x lifecycle: added onShow() to repaint from settings.
@@ -192,8 +193,9 @@ SH.registerTab('settings', 'company', {
            Data & Storage owns the picker, js/app.js owns the Reconnect bar.
            A per-tab picker trains users to re-pick the folder. --- */
     var banner = SH.el('div', { class: 'warnnote nofolder', html:
-      'No BroSafe data folder is open, so these details are being held in memory only and ' +
-      'will be lost when the page reloads. Choose a folder in <b>Settings › Data &amp; Storage</b>.'
+      'No ' + SH.APP_NAME + ' data folder is open, so these details are being held in memory ' +
+      'only and will be lost when the page reloads. Choose a folder in ' +
+      '<b>Settings › Data &amp; Storage</b>.'
     });
 
     /* --- 8. fields --- */
@@ -252,9 +254,12 @@ SH.registerTab('settings', 'company', {
     var uploadBtn = SH.el('button', { class: 'btn', onClick: function () { picker.click(); } }, 'Upload logo');
     var removeBtn = SH.el('button', { class: 'btn danger', onClick: function () {
       if (!currentLogo()) return;
-      if (SH.settings.get('prefs.confirmBeforeDelete', true) &&
-          !confirm('Remove the company logo? It is removed when you press Save.')) return;
-      logoDraft = null; paintLogo();
+      function drop() { logoDraft = null; paintLogo(); }
+      if (!SH.settings.get('prefs.confirmBeforeDelete', true)) { drop(); return; }
+      SH.modal('Remove logo',
+        SH.el('p', null, 'Remove the company logo? It is removed when you press Save.'),
+        [ { label: 'Keep',   ghost: true, onClick: function (close) { close(); } },
+          { label: 'Remove',              onClick: function (close) { drop(); close(); } } ]);
     } }, 'Remove logo');
 
     /* --- 10. edit / save / cancel --- */
@@ -293,16 +298,19 @@ SH.registerTab('settings', 'company', {
       cancelBtn.classList.toggle('hidden', !on);
     }
 
+    function doCancel() { logoDraft = undefined; setEditing(false); paintAll(); }
+
     editBtn.addEventListener('click', function () {
       setEditing(true);
       CTRL[0].el.focus();
     });
 
     cancelBtn.addEventListener('click', function () {
-      if (isDirty() && !confirm('Discard your changes to the company details?')) return;
-      logoDraft = undefined;
-      setEditing(false);
-      paintAll();                                  // also picks up anything changed elsewhere
+      if (!isDirty()) { doCancel(); return; }
+      SH.modal('Discard changes',
+        SH.el('p', null, 'Discard your changes to the company details?'),
+        [ { label: 'Keep editing', ghost: true, onClick: function (close) { close(); } },
+          { label: 'Discard',                   onClick: function (close) { close(); doCancel(); } } ]);
     });
 
     saveBtn.addEventListener('click', function () {
@@ -326,8 +334,8 @@ SH.registerTab('settings', 'company', {
         SH.el('div', null,
           SH.el('h2', { class: 'section' }, 'Your company'),
           SH.el('p', { class: 'hint', html:
-            'Entered once and applied to every report. Stored in the BroSafe data folder — ' +
-            'not in any project. Client details belong in <b>Project Details</b>.' })
+            'Entered once and applied to every report. Stored in the ' + SH.APP_NAME +
+            ' data folder — not in any project. Client details belong in <b>Project Details</b>.' })
         ),
         SH.el('div', { class: 'acts' }, editBtn, cancelBtn, saveBtn)
       ),
