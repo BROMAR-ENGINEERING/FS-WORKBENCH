@@ -30,6 +30,9 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.2 — MINOR schema: project.lists.deviceTypes back-filled to the
+             default six-type list. Existing arrays are left untouched
+             so user-added types survive.
    0.10.1 — MINOR schema: project.validation.phase1.signoff
              { groups: { <key>: bool }, tech: '', date: '' }
              Back-filled to {} on every open. phase1 itself is also created
@@ -77,6 +80,12 @@
      upgrade the string on the next save. A renamed schema that rejects its
      own old files is a data-loss bug wearing a cosmetics costume. */
   var LEGACY_SCHEMAS = ['brosafe.project/1'];
+
+  /* Default device types for project.lists.deviceTypes (0.14.3).
+     Kept as a module constant so blankProject() and _normalize() cannot
+     drift out of sync — a user who deletes then re-imports a project
+     from before this key existed should see the same list as a new one. */
+  var DEFAULT_DEVICE_TYPES = ['estop', 'interlock', 'reset', 'edm', 'output', 'other'];
   /* Read SH.IDB lazily so a load-order mishap cannot throw at IIFE scope.
      If store.js ever executes before core.js, a top-level SH.IDB.name
      reference throws, SH.store is never assigned, and the boot guard
@@ -156,7 +165,7 @@
         method: null,           // 'comprehensive' | 'simplified' | null
         phase1: { signoff: {} } // sign-off state; see docs/DATA_MODEL.md
       },
-      lists: {}
+      lists: { deviceTypes: DEFAULT_DEVICE_TYPES.slice() }
     };
   }
 
@@ -349,6 +358,13 @@
 
       /* shared Device Register (0.14.0) */
       if (!Array.isArray(p.devices)) p.devices = [];
+
+      /* project.lists.deviceTypes (0.14.3) — leave alone if the user has
+         customised it; only fill if absent or the wrong shape. */
+      if (!p.lists || typeof p.lists !== 'object') p.lists = {};
+      if (!Array.isArray(p.lists.deviceTypes)) {
+        p.lists.deviceTypes = DEFAULT_DEVICE_TYPES.slice();
+      }
 
       /* per-SF device assignments (0.14.0) — a manifest entry may pre-date
          these fields, in which case we back-fill each individually. */
