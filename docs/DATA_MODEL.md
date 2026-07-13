@@ -1,6 +1,6 @@
 # FS Workbench — Data Model
 
-**Rev 0.13.1 · 2026-07-09**
+**Rev 0.14.0 · 2026-07-09**
 
 Defines what goes in the project documents. There are **three trees**, deliberately separate:
 
@@ -125,10 +125,31 @@ Identification, Revision History, Document Reference).
 
   "job": { "jobNumber": "", "purchaseOrders": [], "costCode": "" },
 
+  "devices": [                         // shared Device Register (0.14.0)
+    { "id": "dev_k3m1x",                 // generated uid
+      "tag": "EST-001",                  // user-entered, free format
+      "description": "Front Door E-Stop",
+      "type": "estop",                   // estop|interlock|reset|edm|output|other
+      "manufacturer": "",
+      "model": "",
+      "source": "manual",                // manual|library|import
+      "libraryRef": null,                // when source="library": { slug, uid, useCaseIndex }
+      "wiring": [                        // dynamic — as many entries as needed
+        { "label": "CH1 IN",  "wire": "ES30A" },
+        { "label": "CH1 OUT", "wire": "ES30"  },
+        { "label": "CH2 IN",  "wire": "ES31A" },
+        { "label": "CH2 OUT", "wire": "ES31"  }
+      ]
+    }
+  ],
+
   "sfs": [                             // MANIFEST only — full data lives in sf/*.json
     { "id": "A01.01", "name": "Mixer Infeed Conveyor inlet flap safety interlock",
       "accessPoint": "A01", "plr": "d", "pl": "e", "pfh": "8.05e-09",
-      "status": "verified", "file": "sf/sf_A01-01.json" }
+      "status": "verified", "file": "sf/sf_A01-01.json",
+      "inputs":  ["dev_k3m1x"],          // device ids from project.devices[] (0.14.0)
+      "logic":   ["dev_abc123"],
+      "outputs": ["dev_def456"] }
   ],
 
   "validation": {                      // per-project validation state (MINOR — 0.9.2)
@@ -207,6 +228,36 @@ by Access Point" table needs, so that table renders without opening every SF fil
   "notes": ""
 }
 ```
+
+## The shared Device Register
+
+`project.devices[]` is the spine of everything to do with physical safety devices. It is
+defined once per project and referenced by id from Safety Functions, Validation records
+and LOTO. This is the same pattern as `project.areas[]` for locations — one register,
+referenced everywhere, never duplicated.
+
+A device is:
+
+| Field | Purpose |
+|---|---|
+| `id` | Generated uid; stable across renames of the tag. |
+| `tag` | The user's device tag. **Free-format** — varies per project and client convention. Do not validate against a pattern; whatever the drawings say, the tag says. |
+| `description` | Human-readable name (e.g. "Front Door E-Stop"). |
+| `type` | One of `estop` · `interlock` · `reset` · `edm` · `output` · `other`. |
+| `manufacturer`, `model` | Optional identifying data. |
+| `source` | `manual` (user-entered), `library` (from SISTEMA), `import` (from a JSON import). |
+| `libraryRef` | When `source === "library"`, provenance for the SISTEMA use case: `{ slug, uid, useCaseIndex }`. **Values are still snapshotted at verification time** — this is provenance only. |
+| `wiring[]` | Terminal labels and wire numbers. Length is not fixed — a two-channel E-stop has four entries, a single-channel reset button has two. |
+
+Referenced from `project.sfs[]` via three arrays: `inputs[]`, `logic[]`, `outputs[]`.
+Each contains device ids from `project.devices[]`. A device can appear in multiple
+safety functions (e.g. one E-stop covers three zones).
+
+Deleting a device from the register must be blocked (or cascade-warned) if any safety
+function or validation record still references it. The pattern is identical to the
+areas register.
+
+---
 
 ## Notes on the schema
 
