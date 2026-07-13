@@ -30,6 +30,10 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.1 — MINOR schema: project.validation.phase1.signoff
+             { groups: { <key>: bool }, tech: '', date: '' }
+             Back-filled to {} on every open. phase1 itself is also created
+             if absent so reads don't need to guard the intermediate level.
    0.10.0 — MINOR schema additions:
              - project.devices[]  — shared Device Register
              - project.sfs[].inputs / .logic / .outputs — device assignments
@@ -148,7 +152,10 @@
       job: { jobNumber: '', purchaseOrders: [], costCode: '' },
       devices: [],               // shared Device Register (see docs/DATA_MODEL.md)
       sfs: [],                   // manifest; full data in sf/*.json
-      validation: { method: null }, // 'comprehensive' | 'simplified' | null
+      validation: {
+        method: null,           // 'comprehensive' | 'simplified' | null
+        phase1: { signoff: {} } // sign-off state; see docs/DATA_MODEL.md
+      },
       lists: {}
     };
   }
@@ -330,9 +337,15 @@
        scalar/null/[]/{} defaults here — never overwrite a value the user set.
        Called on every project open. */
     _normalize: function (p) {
-      /* validation.method (originally 0.9.2) */
+      /* validation.method (0.9.2) */
       if (!p.validation) p.validation = {};
       if (p.validation.method === undefined) p.validation.method = null;
+
+      /* validation.phase1.signoff (0.14.2) — objects can't use fill(),
+         back-fill each level explicitly so an existing project without
+         phase1 gains the empty shape without wiping user data. */
+      if (!p.validation.phase1) p.validation.phase1 = {};
+      if (!p.validation.phase1.signoff) p.validation.phase1.signoff = {};
 
       /* shared Device Register (0.14.0) */
       if (!Array.isArray(p.devices)) p.devices = [];
