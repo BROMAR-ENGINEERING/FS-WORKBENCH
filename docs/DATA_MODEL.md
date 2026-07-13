@@ -1,6 +1,6 @@
 # FS Workbench — Data Model
 
-**Rev 0.14.0 · 2026-07-09**
+**Rev 0.14.2 · 2026-07-09**
 
 Defines what goes in the project documents. There are **three trees**, deliberately separate:
 
@@ -228,6 +228,30 @@ by Access Point" table needs, so that table renders without opening every SF fil
   "notes": ""
 }
 ```
+
+## Validation state
+
+`project.validation.method` selects between comprehensive and simplified flows
+(0.9.2). Beyond that, each phase or sub-tab persists its own state under
+`project.validation.<phase>`.
+
+`project.validation.phase1.signoff` (0.14.2) — sign-off state for the Phase 1
+(Simple) tab:
+
+```jsonc
+{
+  "groups": { "inputs": true, "outputs": false, "resets": true,
+              "edms": false, "other": false },
+  "tech":   "A. Engineer",
+  "date":   "2026-07-09"
+}
+```
+
+Read/written via `SH.store.get/set('validation.phase1.signoff', {})`. Back-filled
+to `{}` by `_normalize()` on every project open; `validation.phase1` itself is
+created if absent so intermediate reads never see `undefined`.
+
+---
 
 ## The shared Device Register
 
