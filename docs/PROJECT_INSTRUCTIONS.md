@@ -1,6 +1,6 @@
 # FS Workbench — Project Instructions
 
-**Rev 0.13.1 · 2026-07-09 · app version `SH.VERSION = '0.13.1'`**
+**Rev 0.14.0 · 2026-07-09 · app version `SH.VERSION = '0.14.0'`**
 
 Paste this whole file into the Claude Project's *Custom Instructions*.
 
@@ -17,7 +17,16 @@ no internet required.
 
 ---
 
-## 2. File ownership — read this before writing anything
+## 2. Read `docs/RECENT_CHANGES.md` first
+
+Every schema addition, new shared service and behaviour change in the last few
+releases is listed there. It replaces the per-change broadcast prompts that
+used to be pasted into each chat. If the key or service you need appears in
+`docs/RECENT_CHANGES.md`, use it — that is the current state.
+
+---
+
+## 3. File ownership — read this before writing anything
 
 FS Workbench is built across several parallel chats. **Crossing this line breaks other
 people's work.**
@@ -51,7 +60,7 @@ services and schema changes belong in the core chat — say so, don't do it.
 
 ---
 
-## 3. Hard constraints — never break these
+## 4. Hard constraints — never break these
 
 1. **Runs from `file://`.** No server, build step, npm, internet or CDN.
 2. **No ES modules.** No `import`/`export`, no `<script type="module">`, **no `fetch()` of
@@ -77,7 +86,7 @@ services and schema changes belong in the core chat — say so, don't do it.
 
 ---
 
-## 4. Architecture
+## 5. Architecture
 
 Shell `index.html` loads core scripts in this order only:
 
@@ -104,7 +113,7 @@ Reference implementation: `pages/settings/tabs/company/company.js`
 
 ---
 
-## 5. Two stores, kept strictly separate
+## 6. Two stores, kept strictly separate
 
 - **`SH.store`** — open project (client data, project folder). Company/logo/theme never go here.
 - **`SH.settings`** — app config (company, themes, sections, libraries — data folder).
@@ -126,7 +135,7 @@ echoing their own write — use `SH.store.projectId()` to detect identity change
 
 ---
 
-## 6. Schema changes
+## 7. Schema changes
 
 `docs/DATA_MODEL.md` is the single source of truth. Core chat only.
 
@@ -139,7 +148,7 @@ Declare the addition in this chat before writing it anywhere else.
 
 ---
 
-## 7. Shared services — reuse, never duplicate
+## 8. Shared services — reuse, never duplicate
 
 | Service | What it does |
 |---|---|
@@ -154,7 +163,7 @@ Declare the addition in this chat before writing it anywhere else.
 
 ---
 
-## 8. Styling
+## 9. Styling
 
 CSS variables from `css/app.css` only — never hard-code a colour.
 
@@ -174,7 +183,7 @@ genuinely shared.
 
 ---
 
-## 9. Traps that have already bitten, in this codebase
+## 10. Traps that have already bitten, in this codebase
 
 - **`showDirectoryPicker()` needs a live user gesture** — first statement of a click handler,
   never after `await`.
@@ -206,7 +215,7 @@ genuinely shared.
 
 ---
 
-## 10. Repository
+## 11. Repository
 
 The repo contains the app only. Data and project folders are never committed.
 
@@ -224,7 +233,7 @@ repo/
 
 ---
 
-## 11. How to work with me
+## 12. How to work with me
 
 - Change only the files the task needs. State explicitly if a core file must change.
 - **Return complete file contents**, header updated, on every change.
