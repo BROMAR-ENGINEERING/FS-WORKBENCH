@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — core
+   FS Workbench — core
    File:     js/core.js
-   Rev:      0.12.0
+   Rev:      0.13.0
    Updated:  2026-07-09
    Requires: (none — load first)
    --------------------------------------------------------------
@@ -20,8 +20,76 @@ window.SH = window.SH || {};
   SH.APP = { name: 'FS Workbench', accent: 'Workbench' };
   SH.APP_NAME = SH.APP.name;
 
+  /* --- the IndexedDB that caches directory handles ---------------------
+     A path string cannot reopen a folder, so the FileSystemDirectoryHandle
+     itself is cached here: the data folder, the projects root, and the
+     recent-project handles. NOTHING else goes in IndexedDB.
+
+     `legacy` is the pre-rename database. Renaming the DB without migrating
+     would orphan every handle: the user would be sent back to the folder
+     picker and lose their recent projects, for nothing but a cosmetic
+     change. SH.migrateHandleDb() copies the records across once, at boot. */
+  SH.IDB = { name: 'fs-workbench', store: 'handles', legacy: 'brosafe' };
+
+  /* Copy any records from the legacy database, then drop it. Always resolves:
+     a failed migration costs one folder re-pick, never a broken boot. */
+  SH.migrateHandleDb = function () {
+    return new Promise(function (resolve) {
+      if (!window.indexedDB) return resolve(false);
+
+      function open(name) {
+        return new Promise(function (res, rej) {
+          var rq = indexedDB.open(name, 1);
+          rq.onupgradeneeded = function () {
+            if (!rq.result.objectStoreNames.contains(SH.IDB.store)) {
+              rq.result.createObjectStore(SH.IDB.store);
+            }
+          };
+          rq.onsuccess = function () { res(rq.result); };
+          rq.onerror = function () { rej(rq.error); };
+        });
+      }
+
+      var oldDb, newDb;
+      open(SH.IDB.legacy).then(function (db) {
+        oldDb = db;
+        var tx = db.transaction(SH.IDB.store, 'readonly');
+        var os = tx.objectStore(SH.IDB.store);
+        return new Promise(function (res) {
+          var keys = os.getAllKeys(), vals = os.getAll();
+          tx.oncomplete = function () { res({ keys: keys.result || [], vals: vals.result || [] }); };
+          tx.onerror = function () { res({ keys: [], vals: [] }); };
+        });
+      }).then(function (data) {
+        if (!data.keys.length) { if (oldDb) oldDb.close(); return resolve(false); }
+        return open(SH.IDB.name).then(function (db) {
+          newDb = db;
+          var tx = db.transaction(SH.IDB.store, 'readwrite');
+          var os = tx.objectStore(SH.IDB.store);
+          data.keys.forEach(function (k, i) { os.put(data.vals[i], k); });
+          return new Promise(function (res) {
+            tx.oncomplete = function () { res(true); };
+            tx.onerror = function () { res(false); };
+          });
+        }).then(function (ok) {
+          if (oldDb) oldDb.close();
+          if (newDb) newDb.close();
+          if (ok) {
+            try { indexedDB.deleteDatabase(SH.IDB.legacy); } catch (e) { /* leave it */ }
+            console.info(SH.APP_NAME + ': migrated ' + data.keys.length +
+                         ' cached folder handle(s) from the previous database.');
+          }
+          resolve(ok);
+        });
+      }).catch(function () {
+        if (oldDb) try { oldDb.close(); } catch (e) {}
+        resolve(false);
+      });
+    });
+  };
+
   /* --- application revision (single source of truth; shown in header) --- */
-  SH.VERSION = '0.12.0';
+  SH.VERSION = '0.13.0';
   SH.BUILD   = '2026-07-09';
 
   /* --- registries (filled by page/tab scripts as they load) --- */
