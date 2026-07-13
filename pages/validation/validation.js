@@ -1,7 +1,7 @@
 /* ==============================================================
    FS Workbench — Validation page controller
    File:     pages/validation/validation.js
-   Rev:      0.5.1
+   Rev:      0.6.0
    Updated:  2026-07-09
    Requires: core.js, store.js (SH.store.get / SH.store.set)
    --------------------------------------------------------------
@@ -19,23 +19,34 @@
 SH.registerPage('validation', (function () {
 
   /* ---- tab definitions per method -------------------------------- */
+  /* Comprehensive uses four Phase tabs; Simplified uses three consolidated
+     tabs. Both share Version Control and Report, whose ids MUST stay as
+     'version-control' — the corresponding tab files register themselves
+     under that id and renaming would silently blank those tabs until every
+     tab chat was told to rename in lockstep. */
   var TABS = {
     comprehensive: [
-      { id: 'phase-1',          label: 'Phase 1 \u2014 I/O Verification',      src: 'pages/validation/tabs/phase-1/phase-1.js' },
-      { id: 'phase-2',          label: 'Phase 2 \u2014 Normal Operation',       src: 'pages/validation/tabs/phase-2/phase-2.js' },
-      { id: 'phase-3',          label: 'Phase 3 \u2014 Fault Injection',        src: 'pages/validation/tabs/phase-3/phase-3.js' },
-      { id: 'phase-4',          label: 'Phase 4 \u2014 Category Verification',  src: 'pages/validation/tabs/phase-4/phase-4.js' },
-      { id: 'version-control',  label: 'Version Control',                       src: 'pages/validation/tabs/version-control/version-control.js' },
-      { id: 'report',           label: 'Report',                                src: 'pages/validation/tabs/report/report.js' }
+      { id: 'phase-1',         label: 'Phase 1 \u2014 I/O Verification',     src: 'pages/validation/tabs/phase-1/phase-1.js' },
+      { id: 'phase-2',         label: 'Phase 2 \u2014 Normal Operation',      src: 'pages/validation/tabs/phase-2/phase-2.js' },
+      { id: 'phase-3',         label: 'Phase 3 \u2014 Fault Injection',       src: 'pages/validation/tabs/phase-3/phase-3.js' },
+      { id: 'phase-4',         label: 'Phase 4 \u2014 Category Verification', src: 'pages/validation/tabs/phase-4/phase-4.js' },
+      { id: 'version-control', label: 'Version Control',                      src: 'pages/validation/tabs/version-control/version-control.js' },
+      { id: 'report',          label: 'Report',                               src: 'pages/validation/tabs/report/report.js' }
     ],
     simplified: [
-      { id: 'input-verification',    label: 'Input Verification',      src: 'pages/validation/tabs/input-verification/input-verification.js' },
-      { id: 'output-verification',   label: 'Output Verification',     src: 'pages/validation/tabs/output-verification/output-verification.js' },
-      { id: 'category-verification', label: 'Category Verification',   src: 'pages/validation/tabs/category-verification/category-verification.js' },
-      { id: 'version-control',       label: 'Version Control',         src: 'pages/validation/tabs/version-control/version-control.js' },
-      { id: 'report',                label: 'Report',                  src: 'pages/validation/tabs/report/report.js' }
+      { id: 'input-verification',    label: 'Input Verification',    src: 'pages/validation/tabs/input-verification/input-verification.js' },
+      { id: 'output-verification',   label: 'Output Verification',   src: 'pages/validation/tabs/output-verification/output-verification.js' },
+      { id: 'category-verification', label: 'Category Verification', src: 'pages/validation/tabs/category-verification/category-verification.js' },
+      { id: 'version-control',       label: 'Version Control',       src: 'pages/validation/tabs/version-control/version-control.js' },
+      { id: 'report',                label: 'Report',                src: 'pages/validation/tabs/report/report.js' }
     ]
   };
+
+  /* Every validation.phaseN and validation.<stage> key we may clear when
+     the method changes. Keeping this in one place stops the list going
+     stale when a new phase key is added. */
+  var CLEARABLE_KEYS = ['phase1','phase2','phase3','phase4',
+                        'inputVerification','outputVerification','categoryVerification'];
 
   /* ---- page object ----------------------------------------------- */
   return {
@@ -212,7 +223,6 @@ SH.registerPage('validation', (function () {
     _methodCard: function (title, desc, method) {
       var self = this;
       var card = SH.el('div', { class: 'card' });
-      card.style.cursor = 'pointer';
 
       var h = SH.el('div', null);
       h.style.cssText = 'font-family:var(--display);font-size:17px;font-weight:600;margin-bottom:8px';
@@ -225,20 +235,26 @@ SH.registerPage('validation', (function () {
 
       var btn = SH.el('button', {
         class: 'btn',
-        onClick: function (e) {
-          e.stopPropagation();
-          self._chooseMethod(method);
-        }
-      }, 'Use ' + title);
+        onClick: function () { self._chooseMethod(method); }
+      }, 'Select');
       card.appendChild(btn);
-
-      card.addEventListener('click', function () { self._chooseMethod(method); });
       return card;
     },
 
+    /* Called from the initial selector (method is currently null). Just
+       write — no data exists yet, so no confirmation is needed. */
     _chooseMethod: function (method) {
       SH.store.set('validation.method', method);
       /* _sync() will fire via project:changed */
+    },
+
+    /* Wipe every phase / stage key we know about, then write the new method.
+       Called only from the change flow, after the user has confirmed. */
+    _clearAndSetMethod: function (method) {
+      for (var i = 0; i < CLEARABLE_KEYS.length; i++) {
+        SH.store.set('validation.' + CLEARABLE_KEYS[i], {});
+      }
+      SH.store.set('validation.method', method);
     },
 
     /* ----------------------------------------------------------------
@@ -282,23 +298,26 @@ SH.registerPage('validation', (function () {
       location.hash = '#/validation/' + (valid ? hash : tabs[0].id);
     },
 
+    /* Step 1 of the change flow: warn the user, and let them pick the new
+       method inside the modal. Cancel leaves everything untouched. */
     _confirmChangeMethod: function () {
       var self = this;
-      var label = this._method === 'comprehensive' ? 'Comprehensive' : 'Simplified';
+      var current = this._method === 'comprehensive' ? 'Comprehensive' : 'Simplified';
+      var target  = this._method === 'comprehensive' ? 'simplified'    : 'comprehensive';
+      var targetLabel = target === 'comprehensive' ? 'Comprehensive' : 'Simplified';
 
-      var msg = SH.el('p', null,
-        'Switching away from ' + label + ' Validation will permanently clear all ' +
-        'existing validation data for this project. This cannot be undone.');
+      var body = SH.el('div');
+      body.appendChild(SH.el('p', null,
+        'Changing the validation method will clear existing validation data. ' +
+        'Continue?'));
+      body.appendChild(SH.el('p', { class: 'hint' },
+        'Current: ' + current + '. New: ' + targetLabel + '.'));
 
-      var errEl = SH.el('div', { class: 'modal-err' }, '');
-
-      SH.modal('Change Validation Method', msg, [
-        { label: 'Cancel', ghost: true, onClick: function (c) { c(); } },
-        { label: 'Clear data and change method', onClick: function (c) {
-            /* Clear existing validation data and reset the method. */
-            SH.store.set('validation.method', null);
-            /* TODO: when validation data keys are defined, clear them here. */
-            c();
+      SH.modal('Change Validation Method', body, [
+        { label: 'Cancel', ghost: true, onClick: function (close) { close(); } },
+        { label: 'Change Method',       onClick: function (close) {
+            self._clearAndSetMethod(target);
+            close();
           }
         }
       ]);
