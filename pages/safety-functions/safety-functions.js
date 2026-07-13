@@ -1,11 +1,12 @@
 /* ==============================================================
    FS Workbench — Safety Functions page
    File:     pages/safety-functions/safety-functions.js
-   Rev:      0.5.0
+   Rev:      0.6.0
    Updated:  2026-07-09
    Requires: core.js, store.js
    --------------------------------------------------------------
-   Three-panel page controller. Left sidebar toggles between
+   Three-panel page controller with Pilz Multi Configurator XML
+   import (0.6.0). Left sidebar toggles between
    Functions and Devices lists (UI state, not persisted). Right
    panel loads sub-tabs when an item is selected.
 
@@ -36,7 +37,7 @@ SH.registerPage('safety-functions', (function () {
     + '.sf-toggle button:last-child{border-right:0}'
     + '.sf-toggle button.active{background:var(--card);color:var(--ink);box-shadow:inset 0 -2px 0 var(--amber)}'
     + '.sf-toggle button:hover:not(.active){color:var(--ink)}'
-    + '.sf-newbar{padding:8px;border-bottom:1px solid var(--line-2)}'
+    + '.sf-newbar{padding:8px;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:6px}'
     + '.sf-newbar .btn{width:100%}'
     + '.sf-list{flex:1;overflow-y:auto;padding:6px}'
     + '.sf-item{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:6px;padding:8px 10px;margin:2px 0;cursor:pointer;font:inherit;font-family:var(--sans);color:var(--ink);transition:background .12s ease}'
@@ -181,6 +182,15 @@ SH.registerPage('safety-functions', (function () {
         }
       }, this._mode === 'sf' ? '+ New Safety Function' : '+ New Device');
       newBar.appendChild(newBtn);
+
+      /* Import button — Devices mode only. Hidden in Functions mode. */
+      var importBtn = SH.el('button', {
+        class: 'btn ghost sm',
+        onClick: function () { self._importPilzClicked(); }
+      }, 'Import from Pilz…');
+      importBtn.style.display = (this._mode === 'device') ? '' : 'none';
+      newBar.appendChild(importBtn);
+
       side.appendChild(newBar);
 
       var list = SH.el('div', { class: 'sf-list' });
@@ -188,7 +198,8 @@ SH.registerPage('safety-functions', (function () {
 
       this._side    = side;
       this._sideList= list;
-      this._sideNew = newBtn;
+      this._sideNew    = newBtn;
+      this._sideImport = importBtn;
       this._sideToggleF = btnF;
       this._sideToggleD = btnD;
 
@@ -210,6 +221,7 @@ SH.registerPage('safety-functions', (function () {
       this._sideToggleF.classList.toggle('active', mode === 'sf');
       this._sideToggleD.classList.toggle('active', mode === 'device');
       this._sideNew.textContent = mode === 'sf' ? '+ New Safety Function' : '+ New Device';
+      this._sideImport.style.display = (mode === 'device') ? '' : 'none';
       /* clear selection when switching mode: an SF id is not a device id */
       this._selected = null;
       this._paintPlaceholder();
@@ -441,7 +453,235 @@ SH.registerPage('safety-functions', (function () {
       }).catch(function (err) {
         thost.innerHTML = '<div class="stub error">Failed to load tab: ' + SH.esc(err.message) + '</div>';
       });
+    },
+
+    /* ----------------------------------------------------------------
+       Pilz Multi Configurator XML import
+       ---------------------------------------------------------------- */
+
+    _importPilzClicked: function () {
+      var self = this;
+      /* File pickers must be created on the click gesture; keep this
+         synchronous until input.click() returns. */
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.xml';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        document.body.removeChild(input);
+        if (!file) return;
+
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var devices = self._parsePilzXml(String(reader.result));
+            self._mergePilzDevices(devices);
+          } catch (e) {
+            self._pilzErrorModal(e);
+          }
+        };
+        reader.onerror = function () {
+          self._pilzErrorModal(new Error('Could not read the file.'));
+        };
+        reader.readAsText(file);
+      });
+
+      input.click();
+    },
+
+    _parsePilzXml: function (xmlText) {
+      var dp  = new DOMParser();
+      var doc = dp.parseFromString(xmlText, 'text/xml');
+
+      /* Browser DOMParser stuffs errors into a <parsererror> element rather
+         than throwing. Detect it before anything else. */
+      var perr = doc.getElementsByTagName('parsererror');
+      if (perr && perr.length) {
+        var msg = (perr[0].textContent || '').replace(/\s+/g, ' ').trim();
+        if (msg.length > 240) msg = msg.slice(0, 237) + '…';
+        var pe = new Error(msg || 'Malformed XML.');
+        pe.code = 'PARSE_ERROR';
+        throw pe;
+      }
+
+      var root = doc.documentElement;
+      if (!root || root.nodeName !== 'MPNOZBlocksAndConnections') {
+        var re = new Error('This does not appear to be a Pilz Multi Configurator export.');
+        re.code = 'NOT_PILZ';
+        throw re;
+      }
+
+      return this._pilzExtractDevices(root);
+    },
+
+    _pilzExtractDevices: function (root) {
+      function normWS(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+      function attrs(el, name) { return (el && el.getAttribute) ? (el.getAttribute(name) || '') : ''; }
+      function collect(el, tag) {
+        var out = [];
+        if (!el) return out;
+        var all = el.getElementsByTagName(tag);
+        for (var i = 0; i < all.length; i++) out.push(all[i]);
+        return out;
+      }
+      function firstChild(el, tag) {
+        var kids = collect(el, tag);
+        return kids.length ? kids[0] : null;
+      }
+      function textOf(el) {
+        if (!el) return '';
+        var kids = el.childNodes || []; var t = '';
+        for (var i = 0; i < kids.length; i++) if (kids[i].nodeType === 3) t += kids[i].nodeValue;
+        return normWS(t);
+      }
+      function typeFromBlock(bt) {
+        switch (bt) {
+          case 'E-Stop':           return 'estop';
+          case 'Safety Gate':      return 'interlock';
+          case 'Button Switch':    return 'reset';
+          case 'Function Element': return 'other';
+          default:                 return 'other';
+        }
+      }
+      /* Strip channel suffix like " Ch1" / " - Ch2" / " CH 3". Only used on
+         the first-input description for input blocks. */
+      function stripCh(s) {
+        var v = normWS(s);
+        v = v.replace(/\s*[-\u2013\u2014]?\s*Ch\s*\d+\s*$/i, '');
+        return normWS(v);
+      }
+
+      var devices = [];
+      var i, j;
+
+      /* --- Inputs -------------------------------------------------- */
+      var iBlocks = collect(root, 'InputBlock');
+      for (i = 0; i < iBlocks.length; i++) {
+        var ib = iBlocks[i];
+        var ins = collect(ib, 'inputBlockInput');
+        var firstUserText = ins.length ? attrs(ins[0], 'ioUserText') : '';
+        var wiringIn = [];
+        for (j = 0; j < ins.length; j++) {
+          wiringIn.push({
+            label: normWS(attrs(ins[j], 'ioUserText')),
+            wire:  normWS(attrs(ins[j], 'ioName'))
+          });
+        }
+        devices.push({
+          tag: normWS(attrs(ib, 'equipmentId')),
+          type: typeFromBlock(attrs(ib, 'blockType')),
+          description: stripCh(firstUserText),
+          manufacturer: 'Pilz',
+          model: '',
+          source: 'import',
+          libraryRef: null,
+          wiring: wiringIn
+        });
+      }
+
+      /* --- EDMs (InputCopyModule) --------------------------------- */
+      var edms = collect(root, 'InputCopyModule');
+      for (i = 0; i < edms.length; i++) {
+        var em = edms[i];
+        var mod = textOf(firstChild(em, 'blockModule'));
+        var io  = textOf(firstChild(em, 'blockIO'));
+        var wire = mod && io ? (mod + '.' + io) : (mod || io || '');
+        var eqTag = normWS(attrs(em, 'equipmentId'));
+        devices.push({
+          tag: eqTag,
+          type: 'edm',
+          description: eqTag,
+          manufacturer: 'Pilz',
+          model: '',
+          source: 'import',
+          libraryRef: null,
+          wiring: [{ label: 'EDM IN', wire: wire }]
+        });
+      }
+
+      /* --- Outputs ------------------------------------------------- */
+      var oBlocks = collect(root, 'OutputBlock');
+      for (i = 0; i < oBlocks.length; i++) {
+        var ob = oBlocks[i];
+        var outs = collect(ob, 'outputBlockOutput');
+        var firstOut = outs.length ? attrs(outs[0], 'ioUserText') : '';
+        var wiringOut = [];
+        for (j = 0; j < outs.length; j++) {
+          wiringOut.push({
+            label: normWS(attrs(outs[j], 'ioUserText')),
+            wire:  normWS(attrs(outs[j], 'ioName'))
+          });
+        }
+        devices.push({
+          tag: normWS(attrs(ob, 'equipmentId')),
+          type: 'output',
+          description: normWS(firstOut),
+          manufacturer: 'Pilz',
+          model: '',
+          source: 'import',
+          libraryRef: null,
+          wiring: wiringOut
+        });
+      }
+
+      return devices;
+    },
+
+    _mergePilzDevices: function (parsed) {
+      /* Match on tag with case-fold + whitespace normalisation, so
+         "HYD CONT'S OUTPUTS" and "hyd  cont's  outputs" collide correctly. */
+      function key(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+      var existing = SH.store.get('devices', []) || [];
+      var seen = {};
+      for (var i = 0; i < existing.length; i++) {
+        var k = key(existing[i].tag);
+        if (k) seen[k] = true;
+      }
+
+      var toAdd = [];
+      var skipped = 0;
+      var stamp = Date.now().toString(36);
+      for (var j = 0; j < parsed.length; j++) {
+        var d = parsed[j];
+        var kk = key(d.tag);
+        if (kk && seen[kk]) { skipped++; continue; }
+        d.id = 'dev_' + stamp + '_' + toAdd.length;
+        toAdd.push(d);
+        if (kk) seen[kk] = true;
+      }
+
+      if (toAdd.length) {
+        SH.store.set('devices', existing.concat(toAdd));
+        this._renderSidebarList();
+      }
+
+      this._pilzSummaryModal(toAdd.length, skipped);
+    },
+
+    _pilzSummaryModal: function (imported, skipped) {
+      var body = SH.el('div');
+      body.appendChild(SH.el('p', null,
+        'Imported ' + imported + ' device' + (imported === 1 ? '' : 's') +
+        '. ' + skipped + ' already existed and ' +
+        (skipped === 1 ? 'was' : 'were') + ' skipped.'));
+      SH.modal('Import complete', body, [
+        { label: 'OK', onClick: function (close) { close(); } }
+      ]);
+    },
+
+    _pilzErrorModal: function (err) {
+      var title = (err && err.code === 'NOT_PILZ') ? 'Not a Pilz export' : 'Import failed';
+      var body  = SH.el('div');
+      body.appendChild(SH.el('p', null, (err && err.message) || 'Unknown error.'));
+      SH.modal(title, body, [
+        { label: 'OK', onClick: function (close) { close(); } }
+      ]);
     }
+
   };
 
 }()));
