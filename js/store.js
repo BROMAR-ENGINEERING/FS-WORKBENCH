@@ -30,6 +30,13 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.0 — MINOR schema additions:
+             - project.devices[]  — shared Device Register
+             - project.sfs[].inputs / .logic / .outputs — device assignments
+             All three are back-filled by _normalize() so existing projects open
+             unchanged and pick up the new keys on next save. The schema string
+             fsworkbench.project/1 is unchanged — old files are not migrated,
+             they simply gain the defaults transparently.
    0.9.3 — SH.IDB is now read lazily inside idb() rather than at IIFE scope.
           A top-level SH.IDB.name reference threw if store.js ever loaded before
           core.js, leaving SH.store unassigned and the boot guard reporting
@@ -139,6 +146,7 @@
       documents: {},             // per-document revision history
       involvedParties: [],       // RACI
       job: { jobNumber: '', purchaseOrders: [], costCode: '' },
+      devices: [],               // shared Device Register (see docs/DATA_MODEL.md)
       sfs: [],                   // manifest; full data in sf/*.json
       validation: { method: null }, // 'comprehensive' | 'simplified' | null
       lists: {}
@@ -318,9 +326,27 @@
     /* Ensure keys added in later schema revisions exist on projects written
        by an older version. Add only scalar/null defaults here — never
        overwrite a value the user set. Arrays cannot use fill(). */
+    /* Back-fill keys added after a project was first created. Add only
+       scalar/null/[]/{} defaults here — never overwrite a value the user set.
+       Called on every project open. */
     _normalize: function (p) {
+      /* validation.method (originally 0.9.2) */
       if (!p.validation) p.validation = {};
       if (p.validation.method === undefined) p.validation.method = null;
+
+      /* shared Device Register (0.14.0) */
+      if (!Array.isArray(p.devices)) p.devices = [];
+
+      /* per-SF device assignments (0.14.0) — a manifest entry may pre-date
+         these fields, in which case we back-fill each individually. */
+      if (Array.isArray(p.sfs)) {
+        p.sfs.forEach(function (sf) {
+          if (!Array.isArray(sf.inputs))  sf.inputs  = [];
+          if (!Array.isArray(sf.logic))   sf.logic   = [];
+          if (!Array.isArray(sf.outputs)) sf.outputs = [];
+        });
+      }
+
       return p;
     },
 
