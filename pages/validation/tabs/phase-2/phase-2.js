@@ -1,9 +1,9 @@
 /* ==============================================================
    FS Workbench — Validation › Phase 2 — Normal Operation
    File:     pages/validation/tabs/phase-2/phase-2.js
-   Rev:      0.4.0
+   Rev:      0.4.1
    Updated:  2026-07-15
-   Requires: core.js, store.js
+   Requires: core.js, store.js, css/app.css >= 0.15.4 (.tab-host.wide)
    --------------------------------------------------------------
    Safety matrix: input devices × (reset zones + output devices).
    Reads/writes project.validation.phase2.matrix only.
@@ -75,6 +75,8 @@ SH.registerTab('validation', 'phase-2', (function () {
              rowOrder: [], colOrder: [], hidden: [], prefs: { showPageRef: true } };
   }
 
+  /* store.js >= 0.15.3 back-fills these; defaults kept so the tab also
+     works against an older store. */
   function readMatrix() {
     var m = SH.store.get('validation.phase2.matrix', null);
     if (!m || typeof m !== 'object') return blankMatrix();
@@ -175,6 +177,7 @@ SH.registerTab('validation', 'phase-2', (function () {
       host.appendChild(SH.el('style', { html: CSS }));
       this._root = SH.el('div', { class: 'p2' });
       host.appendChild(this._root);
+      host.classList.add('wide');   /* core .tab-host.wide — 0.15.4 */
 
       this._onProject = function () {
         var pid = SH.store.projectId();
