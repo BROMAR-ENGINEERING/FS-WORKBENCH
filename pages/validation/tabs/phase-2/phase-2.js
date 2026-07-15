@@ -1,7 +1,7 @@
 /* ==============================================================
    FS Workbench — Validation › Phase 2 — Normal Operation
    File:     pages/validation/tabs/phase-2/phase-2.js
-   Rev:      0.3.0
+   Rev:      0.4.0
    Updated:  2026-07-15
    Requires: core.js, store.js
    --------------------------------------------------------------
@@ -27,7 +27,13 @@ SH.registerTab('validation', 'phase-2', (function () {
     + '.p2 th.p2-col .p2-col-in{display:flex;gap:6px;align-items:center;justify-content:space-between}'
     + '.p2 th.p2-fix{white-space:nowrap}'
     + '.p2 td.p2-num{text-align:right;color:var(--muted);white-space:nowrap}'
-    + '.p2 td.p2-num .p2-grip{cursor:grab;color:var(--muted);margin-right:4px;font-size:13px}'
+    + '.p2 td.p2-num .p2-grip{display:inline-block;cursor:grab;color:var(--muted);'
+    + 'margin-right:6px;font-size:13px;line-height:1;touch-action:none;'
+    + '-webkit-user-select:none;user-select:none}'
+    + '.p2 td.p2-num .p2-grip:hover{color:var(--amber)}'
+    + '.p2 tr.p2-dragrow{background:var(--black-3);outline:2px solid var(--amber);'
+    + 'outline-offset:-2px}'
+    + '.p2 tr.p2-dragrow .p2-grip{cursor:grabbing}'
     + '.p2 td.p2-dev{white-space:normal;min-width:170px}'
     + '.p2 td.p2-dev .p2-dev-in{display:flex;gap:6px;align-items:flex-start;justify-content:space-between}'
     + '.p2 td.p2-dev small{display:block;color:var(--muted)}'
@@ -56,7 +62,6 @@ SH.registerTab('validation', 'phase-2', (function () {
     + '.p2 .p2-x:hover{color:var(--fail)}'
     + '.p2 .p2-dragging{opacity:.4}'
     + '.p2 th.p2-over{outline:2px solid var(--amber);outline-offset:-2px}'
-    + '.p2 tr.p2-over td{border-top:2px solid var(--amber)}'
     + '.p2 .p2-hid{display:flex;gap:8px;align-items:center;margin-bottom:6px}'
     + '.p2 .p2-hid span{flex:1}';
 
@@ -157,7 +162,9 @@ SH.registerTab('validation', 'phase-2', (function () {
     _host: null, _root: null, _pid: null,
     _section: 'matrix',
     _writing: false, _pending: false,
-    _dragCol: null, _dragRow: null,
+    _dragCol: null,
+    _scroll: null,
+    _rowDragEnd: null,
     _onProject: null, _onFocusOut: null,
 
     mount: function (host) {
@@ -173,6 +180,7 @@ SH.registerTab('validation', 'phase-2', (function () {
         var pid = SH.store.projectId();
         if (pid !== self._pid) { self._pid = pid; self._section = 'matrix'; self._render(); return; }
         if (self._writing) return;
+        if (self._rowDragEnd) return;
         if (self._host.contains(document.activeElement)) { self._pending = true; return; }
         self._render();
       };
@@ -198,11 +206,12 @@ SH.registerTab('validation', 'phase-2', (function () {
     },
 
     unmount: function () {
+      if (this._rowDragEnd) this._rowDragEnd();
       if (this._onProject) SH.bus.off('project:changed', this._onProject);
       if (this._onFocusOut && this._host) {
         this._host.removeEventListener('focusout', this._onFocusOut);
       }
-      this._host = this._root = null;
+      this._host = this._root = this._scroll = null;
     },
 
     _save: function (m) {
@@ -223,10 +232,17 @@ SH.registerTab('validation', 'phase-2', (function () {
       return r;
     },
 
+    _without: function (list, v) {
+      var out = [], i;
+      for (i = 0; i < list.length; i++) if (list[i] !== v) out.push(list[i]);
+      return out;
+    },
+
     _render: function () {
       var root = this._root;
       if (!root) return;
       root.innerHTML = '';
+      this._scroll = null;
 
       if (!SH.store.hasProject()) {
         root.appendChild(SH.el('div', { class: 'warnnote' }, 'No project is open.'));
@@ -258,7 +274,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       var groups = [], i, j, d, ids;
       var hidden = m.hidden;
 
-      /* reset zone columns — order is the resetZones[] array itself */
       var rz = [];
       for (i = 0; i < m.resetZones.length; i++) {
         var z = m.resetZones[i];
@@ -311,8 +326,7 @@ SH.registerTab('validation', 'phase-2', (function () {
 
       var all = [];
       for (i = 0; i < groups.length; i++) all = all.concat(groups[i].cols);
-      return { groups: groups, cols: all,
-               hasBand: m.outputGroups.length > 0 };
+      return { groups: groups, cols: all, hasBand: m.outputGroups.length > 0 };
     },
 
     /* ---------- section 1: matrix ---------- */
@@ -342,12 +356,11 @@ SH.registerTab('validation', 'phase-2', (function () {
         }
       }, '+ Add Row'));
       tools.appendChild(SH.el('span', { class: 'hint' },
-        'Drag the \u2059 grip to reorder rows; drag a column header to reorder columns.'));
+        'Drag the \u283f grip to reorder rows; drag a column header to reorder columns.'));
       root.appendChild(tools);
 
       var plan = this._colPlan(m);
 
-      /* rows, ordered */
       var ins = inputDevices(), keys = [], meta = {}, i;
       for (i = 0; i < ins.length; i++) {
         if (m.hidden.indexOf(ins[i].id) !== -1) continue;
@@ -375,8 +388,7 @@ SH.registerTab('validation', 'phase-2', (function () {
       var bandRow = null;
       if (plan.hasBand) {
         bandRow = SH.el('tr', { class: 'p2-grp' });
-        var lead = fixedLabels.length;
-        var g0;
+        var lead = fixedLabels.length, g0;
         for (g0 = 0; g0 < plan.groups.length; g0++) {
           if (plan.groups[g0].id === '__rz__') lead += plan.groups[g0].cols.length;
         }
@@ -409,8 +421,8 @@ SH.registerTab('validation', 'phase-2', (function () {
       var scroll = SH.el('div', { class: 'p2-scroll' });
       scroll.appendChild(table);
       root.appendChild(scroll);
+      this._scroll = scroll;
 
-      /* sticky offset for the column row when a group band is present */
       if (bandRow) {
         setTimeout(function () {
           var h = bandRow.offsetHeight || 26;
@@ -440,7 +452,10 @@ SH.registerTab('validation', 'phase-2', (function () {
       th.addEventListener('dragstart', function (e) {
         self._dragCol = col;
         th.classList.add('p2-dragging');
-        if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', col.key); }
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', col.key);
+        }
       });
       th.addEventListener('dragend', function () {
         self._dragCol = null; th.classList.remove('p2-dragging');
@@ -476,7 +491,6 @@ SH.registerTab('validation', 'phase-2', (function () {
         return;
       }
 
-      /* flat mode — reorder colOrder */
       if (from.groupId === '__flat__') {
         var outs = outputDevices(), keys = [];
         for (i = 0; i < outs.length; i++) keys.push('out:' + outs[i].id);
@@ -485,11 +499,8 @@ SH.registerTab('validation', 'phase-2', (function () {
         return;
       }
 
-      /* grouped mode — same group reorders; cross-group moves the device */
       var srcG = this._group(m, from.groupId), dstG = this._group(m, to.groupId);
-      if (srcG) {
-        srcG.deviceIds = this._without(arr(srcG.deviceIds), from.deviceId);
-      }
+      if (srcG) srcG.deviceIds = this._without(arr(srcG.deviceIds), from.deviceId);
       if (dstG) {
         var d2 = arr(dstG.deviceIds).slice();
         if (d2.indexOf(from.deviceId) === -1) {
@@ -508,13 +519,7 @@ SH.registerTab('validation', 'phase-2', (function () {
       for (i = 0; i < m.outputGroups.length; i++) {
         if (m.outputGroups[i].id === id) return m.outputGroups[i];
       }
-      return null;   /* __loose__ / __flat__ have no record */
-    },
-
-    _without: function (list, v) {
-      var out = [], i;
-      for (i = 0; i < list.length; i++) if (list[i] !== v) out.push(list[i]);
-      return out;
+      return null;
     },
 
     _removeCol: function (col) {
@@ -539,40 +544,20 @@ SH.registerTab('validation', 'phase-2', (function () {
         ]);
     },
 
+    /* ---------- rows ---------- */
+
     _matrixRow: function (item, index, cols, m) {
       var self = this;
-      var tr = SH.el('tr');
       var dev = item.device, stored = item.stored, key = item.key, isDev = item.isDev;
+      var tr = SH.el('tr', { 'data-key': key });
 
-      /* # + drag grip */
       var num = SH.el('td', { class: 'p2-num' });
-      var grip = SH.el('span', { class: 'p2-grip', draggable: 'true', title: 'Drag to reorder' }, '\u2059');
-      grip.addEventListener('dragstart', function (e) {
-        self._dragRow = key;
-        tr.classList.add('p2-dragging');
-        if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); }
-      });
-      grip.addEventListener('dragend', function () {
-        self._dragRow = null; tr.classList.remove('p2-dragging');
-      });
+      var grip = SH.el('span', { class: 'p2-grip', title: 'Drag to reorder' }, '\u283f');
+      grip.addEventListener('pointerdown', function (e) { self._beginRowDrag(e, tr); });
       num.appendChild(grip);
-      num.appendChild(SH.el('span', null, String(index + 1)));
+      num.appendChild(SH.el('span', { class: 'p2-n' }, String(index + 1)));
       tr.appendChild(num);
 
-      tr.addEventListener('dragover', function (e) {
-        if (!self._dragRow || self._dragRow === key) return;
-        e.preventDefault();
-        tr.classList.add('p2-over');
-      });
-      tr.addEventListener('dragleave', function () { tr.classList.remove('p2-over'); });
-      tr.addEventListener('drop', function (e) {
-        if (!self._dragRow || self._dragRow === key) return;
-        e.preventDefault();
-        tr.classList.remove('p2-over');
-        self._dropRow(self._dragRow, key);
-      });
-
-      /* device / manual name */
       var nameCell = SH.el('td', { class: 'p2-dev' });
       var nin = SH.el('div', { class: 'p2-dev-in' });
       if (dev) {
@@ -599,7 +584,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       nameCell.appendChild(nin);
       tr.appendChild(nameCell);
 
-      /* text fields */
       var fields = [];
       if (m.prefs.showPageRef) fields.push('pageRef');
       fields.push('info');
@@ -620,7 +604,6 @@ SH.registerTab('validation', 'phase-2', (function () {
         }(fields[i]));
       }
 
-      /* state cells */
       for (i = 0; i < cols.length; i++) {
         (function (col) {
           var val = stored && stored.cells ? (stored.cells[col.key] || '') : '';
@@ -645,14 +628,74 @@ SH.registerTab('validation', 'phase-2', (function () {
       return tr;
     },
 
-    _dropRow: function (from, to) {
-      var m = readMatrix();
-      var ins = inputDevices(), keys = [], i;
-      for (i = 0; i < ins.length; i++) keys.push(ins[i].id);
-      for (i = 0; i < m.rows.length; i++) if (!m.rows[i].deviceId) keys.push(m.rows[i].id);
-      m.rowOrder = moveKey(applyOrder(keys, m.rowOrder), from, to);
+    /* pointer-drag: the row physically moves as you drag; committed on release */
+    _beginRowDrag: function (e, tr) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (this._rowDragEnd) return;
+      var tbody = tr.parentNode;
+      if (!tbody) return;
+      e.preventDefault();
+
+      var self = this;
+      tr.classList.add('p2-dragrow');
+      document.body.style.cursor = 'grabbing';
+
+      function rowAt(x, y) {
+        var el = document.elementFromPoint(x, y);
+        while (el && el !== document.body) {
+          if (el.tagName === 'TR' && el.parentNode === tbody) return el;
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      function onMove(ev) {
+        var sc = self._scroll, b;
+        if (sc) {
+          b = sc.getBoundingClientRect();
+          if (ev.clientY < b.top + 34)         sc.scrollTop -= 14;
+          else if (ev.clientY > b.bottom - 34) sc.scrollTop += 14;
+        }
+        var t = rowAt(ev.clientX, ev.clientY);
+        if (!t || t === tr) return;
+        var r = t.getBoundingClientRect();
+        if (ev.clientY < r.top + r.height / 2) tbody.insertBefore(tr, t);
+        else                                   tbody.insertBefore(tr, t.nextSibling);
+        self._renumber(tbody);
+      }
+
+      function end() {
+        document.removeEventListener('pointermove', onMove, true);
+        document.removeEventListener('pointerup', end, true);
+        document.removeEventListener('pointercancel', end, true);
+        document.body.style.cursor = '';
+        tr.classList.remove('p2-dragrow');
+        self._rowDragEnd = null;
+        self._commitRowOrder(tbody);
+      }
+
+      this._rowDragEnd = end;
+      document.addEventListener('pointermove', onMove, true);
+      document.addEventListener('pointerup', end, true);
+      document.addEventListener('pointercancel', end, true);
+    },
+
+    _renumber: function (tbody) {
+      var i, n;
+      for (i = 0; i < tbody.children.length; i++) {
+        n = tbody.children[i].querySelector('.p2-n');
+        if (n) n.textContent = String(i + 1);
+      }
+    },
+
+    _commitRowOrder: function (tbody) {
+      var m = readMatrix(), order = [], i, k;
+      for (i = 0; i < tbody.children.length; i++) {
+        k = tbody.children[i].getAttribute('data-key');
+        if (k) order.push(k);
+      }
+      m.rowOrder = order;
       this._save(m);
-      this._render();
     },
 
     _removeRow: function (dev) {
@@ -716,10 +759,10 @@ SH.registerTab('validation', 'phase-2', (function () {
       var i, j, k, d, row;
 
       function outputsForDevice(id) {
-        var res = [], s, arr2, o;
+        var res = [], s, all, o;
         for (s = 0; s < sfs.length; s++) {
-          arr2 = [].concat(sfs[s].inputs || [], sfs[s].logic || [], sfs[s].outputs || []);
-          if (arr2.indexOf(id) === -1) continue;
+          all = [].concat(sfs[s].inputs || [], sfs[s].logic || [], sfs[s].outputs || []);
+          if (all.indexOf(id) === -1) continue;
           o = sfs[s].outputs || [];
           for (k = 0; k < o.length; k++) if (res.indexOf(o[k]) === -1) res.push(o[k]);
         }
@@ -838,7 +881,7 @@ SH.registerTab('validation', 'phase-2', (function () {
               if (m.resetZones[i].id !== z.id) keep.push(m.resetZones[i]);
             }
             m.resetZones = keep;
-            m.hidden = self._without(m.hidden, 'rz:' + z.id);
+            m.hidden   = self._without(m.hidden, 'rz:' + z.id);
             m.colOrder = self._without(m.colOrder, 'rz:' + z.id);
             for (i = 0; i < m.rows.length; i++) {
               r = m.rows[i];
@@ -857,7 +900,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       var outs = outputDevices();
       var i;
 
-      /* matrix columns */
       var cc = SH.el('div', { class: 'card' });
       cc.appendChild(SH.el('h2', { class: 'section' }, 'Matrix Columns'));
       var chk = SH.el('label', { class: 'chk' });
@@ -873,7 +915,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       cc.appendChild(chk);
       root.appendChild(cc);
 
-      /* split matrix table (stored as outputGroups) */
       var gc = SH.el('div', { class: 'card' });
       gc.appendChild(SH.el('h2', { class: 'section' }, 'Split Matrix Table'));
       gc.appendChild(SH.el('p', { class: 'hint' },
@@ -939,7 +980,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       }, '+ Add Section'));
       root.appendChild(gc);
 
-      /* custom states */
       var sc = SH.el('div', { class: 'card' });
       sc.appendChild(SH.el('h2', { class: 'section' }, 'Custom States'));
       sc.appendChild(SH.el('p', { class: 'hint' },
@@ -979,7 +1019,6 @@ SH.registerTab('validation', 'phase-2', (function () {
       sc.appendChild(add);
       root.appendChild(sc);
 
-      /* hidden */
       var hc = SH.el('div', { class: 'card' });
       hc.appendChild(SH.el('h2', { class: 'section' }, 'Hidden from matrix'));
       hc.appendChild(SH.el('p', { class: 'hint' },
@@ -996,7 +1035,9 @@ SH.registerTab('validation', 'phase-2', (function () {
             label = devLabel(deviceById(k.slice(4))); kind = 'column';
           } else if (k.indexOf('rz:') === 0) {
             var z = null, j;
-            for (j = 0; j < m.resetZones.length; j++) if (m.resetZones[j].id === k.slice(3)) z = m.resetZones[j];
+            for (j = 0; j < m.resetZones.length; j++) {
+              if (m.resetZones[j].id === k.slice(3)) z = m.resetZones[j];
+            }
             label = z ? (z.label || 'Reset zone') : '(deleted reset zone)'; kind = 'column';
           } else {
             label = devLabel(deviceById(k)); kind = 'row';
