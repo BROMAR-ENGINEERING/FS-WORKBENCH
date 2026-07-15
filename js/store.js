@@ -30,6 +30,14 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.5 — MINOR schema: validation.phase2.matrix with four arrays
+             (resetZones, outputGroups, customStates, rows). Item shapes
+             deliberately not documented in DATA_MODEL.md until the
+             Phase 2 tab pins them down.
+   0.10.4 — MINOR schema: devices[].wiring[].side back-filled to 'field'
+             when absent. Explicit values ('controller' or 'field') are
+             left untouched. wiring itself is also defensively normalised
+             to [] if a device is missing it.
    0.10.3 — MINOR schema: sfs[].plr back-filled to
              { mode:'direct', value:null, s:null, f:null, p:null }
              only when absent. Existing plr objects untouched.
@@ -166,7 +174,15 @@
       sfs: [],                   // manifest; full data in sf/*.json
       validation: {
         method: null,           // 'comprehensive' | 'simplified' | null
-        phase1: { signoff: {} } // sign-off state; see docs/DATA_MODEL.md
+        phase1: { signoff: {} }, // sign-off state; see docs/DATA_MODEL.md
+        phase2: {                // matrix state for the Phase 2 tab
+          matrix: {
+            resetZones:   [],   // item shapes TBD by the Phase 2 tab
+            outputGroups: [],
+            customStates: [],
+            rows:         []
+          }
+        }
       },
       lists: { deviceTypes: DEFAULT_DEVICE_TYPES.slice() }
     };
@@ -359,8 +375,35 @@
       if (!p.validation.phase1) p.validation.phase1 = {};
       if (!p.validation.phase1.signoff) p.validation.phase1.signoff = {};
 
-      /* shared Device Register (0.14.0) */
+      /* validation.phase2.matrix (0.15.2) — four arrays; item shapes
+         are TBD by the Phase 2 tab as it develops. A wrong-type matrix
+         (not an object) is replaced; a partial matrix has only its
+         missing arrays filled, so tab-in-progress data survives. */
+      if (!p.validation.phase2) p.validation.phase2 = {};
+      if (!p.validation.phase2.matrix ||
+          typeof p.validation.phase2.matrix !== 'object') {
+        p.validation.phase2.matrix = {
+          resetZones: [], outputGroups: [], customStates: [], rows: []
+        };
+      } else {
+        var m = p.validation.phase2.matrix;
+        if (!Array.isArray(m.resetZones))   m.resetZones   = [];
+        if (!Array.isArray(m.outputGroups)) m.outputGroups = [];
+        if (!Array.isArray(m.customStates)) m.customStates = [];
+        if (!Array.isArray(m.rows))         m.rows         = [];
+      }
+
+      /* shared Device Register (0.14.0) + wiring[].side (0.15.1)
+         side defaults to 'field'. The Pilz import parser writes side
+         explicitly at import time; this back-fill only touches entries
+         that pre-date the field or that were entered manually. */
       if (!Array.isArray(p.devices)) p.devices = [];
+      p.devices.forEach(function (dev) {
+        if (!Array.isArray(dev.wiring)) dev.wiring = [];
+        dev.wiring.forEach(function (w) {
+          if (w && w.side === undefined) w.side = 'field';
+        });
+      });
 
       /* project.lists.deviceTypes (0.14.3) — leave alone if the user has
          customised it; only fill if absent or the wrong shape. */
