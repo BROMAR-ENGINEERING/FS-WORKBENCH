@@ -30,6 +30,12 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.7 — MINOR schema: validation.phase3.tests with six arrays
+             (inconsistentInputs, channelShort, voltage24v, groundFault,
+             edm, special). Item shapes TBD by the Phase 3 tab.
+   0.10.6 — MINOR schema: four additive keys on validation.phase2.matrix
+             (rowOrder, colOrder, hidden, prefs.showPageRef). Item
+             shapes for the content arrays are still TBD.
    0.10.5 — MINOR schema: validation.phase2.matrix with four arrays
              (resetZones, outputGroups, customStates, rows). Item shapes
              deliberately not documented in DATA_MODEL.md until the
@@ -180,7 +186,21 @@
             resetZones:   [],   // item shapes TBD by the Phase 2 tab
             outputGroups: [],
             customStates: [],
-            rows:         []
+            rows:         [],
+            rowOrder:     [],   // ordered row keys: device id or manual row id
+            colOrder:     [],   // ordered column keys: 'out:<deviceId>' (flat)
+            hidden:       [],   // hidden keys: device id | 'out:<id>' | 'rz:<id>'
+            prefs:        { showPageRef: true }
+          }
+        },
+        phase3: {                // fault-injection tests for the Phase 3 tab
+          tests: {
+            inconsistentInputs: [],
+            channelShort:       [],
+            voltage24v:         [],
+            groundFault:        [],
+            edm:                [],
+            special:            []
           }
         }
       },
@@ -375,15 +395,19 @@
       if (!p.validation.phase1) p.validation.phase1 = {};
       if (!p.validation.phase1.signoff) p.validation.phase1.signoff = {};
 
-      /* validation.phase2.matrix (0.15.2) — four arrays; item shapes
-         are TBD by the Phase 2 tab as it develops. A wrong-type matrix
-         (not an object) is replaced; a partial matrix has only its
-         missing arrays filled, so tab-in-progress data survives. */
+      /* validation.phase2.matrix (0.15.2 + 0.15.3) — content arrays and
+         view-state (rowOrder / colOrder / hidden / prefs). Item shapes for
+         resetZones/outputGroups/customStates/rows are still TBD by the
+         Phase 2 tab. A wrong-type matrix is replaced entirely; a partial
+         one has only its missing fields filled, so tab-in-progress data
+         survives. */
       if (!p.validation.phase2) p.validation.phase2 = {};
       if (!p.validation.phase2.matrix ||
           typeof p.validation.phase2.matrix !== 'object') {
         p.validation.phase2.matrix = {
-          resetZones: [], outputGroups: [], customStates: [], rows: []
+          resetZones: [], outputGroups: [], customStates: [], rows: [],
+          rowOrder: [], colOrder: [], hidden: [],
+          prefs: { showPageRef: true }
         };
       } else {
         var m = p.validation.phase2.matrix;
@@ -391,6 +415,35 @@
         if (!Array.isArray(m.outputGroups)) m.outputGroups = [];
         if (!Array.isArray(m.customStates)) m.customStates = [];
         if (!Array.isArray(m.rows))         m.rows         = [];
+        if (!Array.isArray(m.rowOrder))     m.rowOrder     = [];
+        if (!Array.isArray(m.colOrder))     m.colOrder     = [];
+        if (!Array.isArray(m.hidden))       m.hidden       = [];
+        if (!m.prefs || typeof m.prefs !== 'object') {
+          m.prefs = { showPageRef: true };
+        } else if (m.prefs.showPageRef === undefined) {
+          m.prefs.showPageRef = true;
+        }
+      }
+
+      /* validation.phase3.tests (0.15.5) — six fault-injection
+         test-record arrays. Item shapes TBD by the Phase 3 tab. A
+         wrong-type tests is replaced; a partial one has only its
+         missing arrays filled. */
+      if (!p.validation.phase3) p.validation.phase3 = {};
+      if (!p.validation.phase3.tests ||
+          typeof p.validation.phase3.tests !== 'object') {
+        p.validation.phase3.tests = {
+          inconsistentInputs: [], channelShort: [], voltage24v: [],
+          groundFault: [], edm: [], special: []
+        };
+      } else {
+        var t3 = p.validation.phase3.tests;
+        if (!Array.isArray(t3.inconsistentInputs)) t3.inconsistentInputs = [];
+        if (!Array.isArray(t3.channelShort))       t3.channelShort       = [];
+        if (!Array.isArray(t3.voltage24v))         t3.voltage24v         = [];
+        if (!Array.isArray(t3.groundFault))        t3.groundFault        = [];
+        if (!Array.isArray(t3.edm))                t3.edm                = [];
+        if (!Array.isArray(t3.special))            t3.special            = [];
       }
 
       /* shared Device Register (0.14.0) + wiring[].side (0.15.1)
