@@ -30,6 +30,12 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.10.8 — MINOR schema: project.customer + full defensive back-fill.
+             Formalises the shape the Customer Details tab has been
+             writing since its Rev 0.8.0; overdue documentation, not a
+             new key. contacts[] defaults to one blank contact.
+             address.state validated against AU codes or ''.
+             logo is null or the exact { dataUrl, name, type, w, h } shape.
    0.10.7 — MINOR schema: validation.phase3.tests with six arrays
              (inconsistentInputs, channelShort, voltage24v, groundFault,
              edm, special). Item shapes TBD by the Phase 3 tab.
@@ -174,6 +180,16 @@
       executiveSummary: [],
       areas: [],                 // the shared Areas & Assets register
       documents: {},             // per-document revision history
+      customer: {                  // client details — see docs/DATA_MODEL.md
+        company:  '',
+        abn:      '',
+        hasAcn:   false,
+        acn:      '',
+        address:  { street: '', suburb: '', postcode: '', state: '' },
+        contacts: [{ id: '', name: '', role: '', email: '', phone: '' }],
+        admin:    { email: '', phone: '' },
+        logo:     null            // null | { dataUrl, name, type, w, h }
+      },
       involvedParties: [],       // RACI
       job: { jobNumber: '', purchaseOrders: [], costCode: '' },
       devices: [],               // shared Device Register (see docs/DATA_MODEL.md)
@@ -457,6 +473,55 @@
           if (w && w.side === undefined) w.side = 'field';
         });
       });
+
+      /* project.customer (0.16.1) — back-fill the full shape without
+         overwriting anything the user already set. contacts[] is an
+         array so it uses the array back-fill path, defaulting to one
+         blank contact when absent or empty. state is one of NSW VIC QLD
+         SA WA TAS NT ACT or ''. wrong-type nested objects are replaced,
+         missing scalar/nullable keys are filled at their defaults. */
+      if (!p.customer || typeof p.customer !== 'object') p.customer = {};
+      var c = p.customer;
+      if (typeof c.company !== 'string') c.company = '';
+      if (typeof c.abn     !== 'string') c.abn     = '';
+      if (typeof c.hasAcn  !== 'boolean') c.hasAcn = false;
+      if (typeof c.acn     !== 'string') c.acn     = '';
+      if (!c.address || typeof c.address !== 'object') c.address = {};
+      if (typeof c.address.street   !== 'string') c.address.street   = '';
+      if (typeof c.address.suburb   !== 'string') c.address.suburb   = '';
+      if (typeof c.address.postcode !== 'string') c.address.postcode = '';
+      /* state: allow the eight AU codes or ''; anything else -> '' */
+      var AU_STATES = ['NSW','VIC','QLD','SA','WA','TAS','NT','ACT'];
+      if (typeof c.address.state !== 'string' ||
+          (c.address.state !== '' && AU_STATES.indexOf(c.address.state) === -1)) {
+        c.address.state = '';
+      }
+      if (!Array.isArray(c.contacts) || c.contacts.length === 0) {
+        c.contacts = [{ id: '', name: '', role: '', email: '', phone: '' }];
+      } else {
+        c.contacts.forEach(function (ct) {
+          if (!ct || typeof ct !== 'object') return;
+          if (typeof ct.id    !== 'string') ct.id    = '';
+          if (typeof ct.name  !== 'string') ct.name  = '';
+          if (typeof ct.role  !== 'string') ct.role  = '';
+          if (typeof ct.email !== 'string') ct.email = '';
+          if (typeof ct.phone !== 'string') ct.phone = '';
+        });
+      }
+      if (!c.admin || typeof c.admin !== 'object') c.admin = {};
+      if (typeof c.admin.email !== 'string') c.admin.email = '';
+      if (typeof c.admin.phone !== 'string') c.admin.phone = '';
+      /* logo: null OR an object with the exact shape below */
+      if (c.logo !== null) {
+        if (!c.logo || typeof c.logo !== 'object' || typeof c.logo.dataUrl !== 'string') {
+          c.logo = null;
+        } else {
+          if (typeof c.logo.name !== 'string') c.logo.name = '';
+          if (typeof c.logo.type !== 'string') c.logo.type = '';
+          if (typeof c.logo.w    !== 'number') c.logo.w    = 0;
+          if (typeof c.logo.h    !== 'number') c.logo.h    = 0;
+        }
+      }
 
       /* project.lists.deviceTypes (0.14.3) — leave alone if the user has
          customised it; only fill if absent or the wrong shape. */
