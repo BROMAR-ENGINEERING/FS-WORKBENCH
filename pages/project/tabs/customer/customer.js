@@ -1,43 +1,55 @@
 /* ==============================================================
    BroSafe — Project Details › Customer Details
    File:     pages/project/tabs/customer/customer.js
-   Rev:      0.8.1
+   Rev:      0.9.0
    Updated:  2026-07-09
    Requires: core.js, store.js (>= 0.7.0)
    Optional: SH.customers (customer library service — see NOTE below)
    --------------------------------------------------------------
    Tab module. Captures the client for this job: company identity,
-   site address, site contacts and administration contact. Reads and
-   writes project.customer through SH.store. Renders into host only.
+   site address, site contacts, administration contact and an
+   optional client logo. Reads/writes project.customer via SH.store.
+   Renders into host only.
+   --------------------------------------------------------------
+   NOTE — client logo persistence (PROVISIONAL — see core chat)
+   SH.store.set() writes JSON only, and there is no confirmed API
+   for writing a binary file into the project folder. The logo is
+   therefore stored inline as a base64 data URL on
+   project.customer.logo, capped at ~500 KB so project.json stays
+   sane. If core adds a project assets folder + binary write API,
+   switch this to store logo.path and blob-load it (as the company
+   logo and section images already do).
    --------------------------------------------------------------
    NOTE — lifecycle (core 0.6.0)
-   mount() runs once; the DOM is kept alive across tab switches, so
-   the tab subscribes to project:changed and repaints when a project
-   is opened, closed or edited elsewhere. A change arriving while the
-   tab is hidden only marks it stale — onShow() repaints. unmount()
-   runs on page teardown: it flushes the pending write, clears timers,
-   revokes any blob: URL from Save customer and drops the listener.
-
-   Our own writes echo back as project:changed. selfWrite suppresses
-   that echo and is cleared on the next tick, so it holds whether the
-   store emits synchronously or defers.
+   mount() runs once; DOM is kept alive across tab switches, so the
+   tab subscribes to project:changed and repaints on open/close/edit.
+   A change while hidden marks it stale — onShow() repaints. unmount()
+   flushes the pending write, clears timers, revokes blob: URLs and
+   drops the listener. Our own writes echo back as project:changed;
+   selfWrite suppresses that echo and clears on the next tick.
    --------------------------------------------------------------
    NOTE — customer library
    Save customer / Load customer use SH.customers.{list,get,save}
-   when that service exists. Until it does they fall back to writing
-   and reading a single .json file (Blob download + FileReader —
-   both work from file://). No localStorage is used either way.
+   when that service exists; otherwise they file a single .json to
+   disk (Blob download + FileReader). No localStorage either way.
    ============================================================== */
 (function () {
   'use strict';
 
   var STATES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+  var LOGO_MAX = 512 * 1024;   // ~500 KB cap on the base64 data URL
 
   /* Scoped to this tab. The global h2.section colour belongs in app.css. */
   var STYLE =
     '<style>' +
     '.t-customer h2.section{color:var(--ink);}' +
     '.t-customer .pill{margin-top:6px;}' +
+    '.t-customer .cd-logo{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}' +
+    '.t-customer .cd-logo-frame{width:160px;height:96px;border:1px solid var(--line);' +
+      'border-radius:6px;background:var(--paper);display:flex;align-items:center;' +
+      'justify-content:center;overflow:hidden;}' +
+    '.t-customer .cd-logo-frame img{max-width:100%;max-height:100%;}' +
+    '.t-customer .cd-logo-frame .cd-logo-empty{color:var(--muted);font-size:12px;padding:0 8px;text-align:center;}' +
     '</style>';
 
   /* ---------- helpers ------------------------------------------------ */
@@ -46,8 +58,7 @@
     return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
-  /* .pill sets `display`, which beats the [hidden] attribute.
-     Toggle inline display instead. */
+  /* .pill sets `display`, which beats the [hidden] attribute. */
   function show(el, on) {
     if (el) el.style.display = on ? '' : 'none';
   }
@@ -64,7 +75,19 @@
       acn: '',
       address: { street: '', suburb: '', postcode: '', state: '' },
       contacts: [blankContact()],
-      admin: { email: '', phone: '' }
+      admin: { email: '', phone: '' },
+      logo: null
+    };
+  }
+
+  function normaliseLogo(raw) {
+    if (!raw || typeof raw !== 'object' || !raw.dataUrl) return null;
+    return {
+      dataUrl: String(raw.dataUrl),
+      name: raw.name || 'logo',
+      type: raw.type || '',
+      w: raw.w || 0,
+      h: raw.h || 0
     };
   }
 
@@ -86,6 +109,7 @@
       c.admin.email = raw.admin.email || '';
       c.admin.phone = raw.admin.phone || '';
     }
+    c.logo = normaliseLogo(raw.logo);
     if (Object.prototype.toString.call(raw.contacts) === '[object Array]' && raw.contacts.length) {
       c.contacts = raw.contacts.map(function (k) {
         return {
@@ -156,17 +180,15 @@
       var selfWrite = false;
       var selfWriteTimer = null;
       var saveTimer = null;
-      var stale = false;          // project changed while this tab was hidden
-      var blobUrls = [];          // outstanding Save customer downloads
+      var stale = false;
+      var blobUrls = [];
       var open = projectOpen();
 
       host.classList.add('t-customer');
 
-      /* A hidden tab has no offsetParent — the shell hides an ancestor. */
       function hidden() { return !host.offsetParent; }
 
-      /* Write, suppressing the project:changed echo. The flag clears on the
-         next tick, so it holds whether the store emits now or defers. */
+      /* Write, suppressing the project:changed echo. Flag clears next tick. */
       function push(obj) {
         selfWrite = true;
         if (selfWriteTimer) clearTimeout(selfWriteTimer);
@@ -200,6 +222,32 @@
         }).join('');
       }
 
+      function logoCard() {
+        var d = open ? '' : ' disabled';
+        var has = !!cust.logo;
+        var frame = has
+          ? '<img src="' + SH.esc(cust.logo.dataUrl) + '" alt="Client logo">'
+          : '<span class="cd-logo-empty">No logo</span>';
+        return '' +
+          '<h2 class="section">Client logo</h2>' +
+          '<div class="card">' +
+            '<div class="cd-logo">' +
+              '<div class="cd-logo-frame">' + frame + '</div>' +
+              '<div>' +
+                '<p>' +
+                  '<button class="btn" data-act="logo-pick"' + d + '>' + (has ? 'Replace logo' : 'Upload logo') + '</button> ' +
+                  '<button class="btn danger" data-act="logo-clear"' + (has && open ? '' : ' disabled') + '>Remove</button>' +
+                '</p>' +
+                '<p class="hint">' + (has
+                  ? SH.esc(cust.logo.name) + (cust.logo.w ? ' — ' + cust.logo.w + '×' + cust.logo.h + ' px' : '')
+                  : 'PNG, JPG or SVG, up to about 500 KB. Used on reports where a client logo is shown.') +
+                '</p>' +
+              '</div>' +
+            '</div>' +
+            '<input type="file" id="cd-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden>' +
+          '</div>';
+      }
+
       function libraryCard() {
         var d = open ? '' : ' disabled';
         var hasLib = !!lib();
@@ -217,7 +265,7 @@
               '<button class="btn ghost" data-act="load"' + d + '>Load customer</button>' +
             '</p>' +
             '<input type="file" id="cd-file" accept="application/json,.json" hidden>' +
-            '<p class="hint">Loading replaces every field on this tab. Customers are stored as JSON files on disk, never in the browser.</p>' +
+            '<p class="hint">Loading replaces every field on this tab, including the logo. Customers are stored as JSON files on disk, never in the browser.</p>' +
           '</div>';
       }
 
@@ -260,6 +308,8 @@
               '<div class="field"></div>' +
             '</div>' +
           '</div>' +
+
+          logoCard() +
 
           '<h2 class="section">Site contacts</h2>' +
           '<div class="card">' +
@@ -313,7 +363,8 @@
             state: val('cd-state')
           },
           contacts: [],
-          admin: { email: val('cd-adm-email'), phone: val('cd-adm-phone') }
+          admin: { email: val('cd-adm-email'), phone: val('cd-adm-phone') },
+          logo: cust.logo               // logo is not a form field — carried through
         };
         var rows = host.querySelectorAll('#cd-contacts tr');
         for (var i = 0; i < rows.length; i++) {
@@ -365,6 +416,49 @@
         var on = !!(wrap && wrap.style.display !== 'none');
         var v = val('cd-acn');
         pill(host.querySelector('#cd-acn-chk'), on && !!v, acnValid(v), 'ACN checksum valid', 'ACN checksum fails');
+      }
+
+      /* -- logo ---------------------------------------------------------- */
+
+      function pickLogo() {
+        var f = host.querySelector('#cd-logo-file');
+        if (f) f.click();
+      }
+
+      function clearLogo() {
+        flush();
+        cust.logo = null;
+        push(cust);
+        paint();
+      }
+
+      function readLogo(file) {
+        if (file.size > LOGO_MAX) {
+          alert('That image is larger than 500 KB. Please use a smaller logo — it is stored inside the project file.');
+          return;
+        }
+        flush();
+        var fr = new FileReader();
+        fr.onload = function () {
+          var dataUrl = fr.result;
+          // measure raster images; SVG has no intrinsic pixel size
+          if (/^data:image\/svg\+xml/.test(dataUrl)) {
+            setLogo(file, dataUrl, 0, 0);
+            return;
+          }
+          var img = new Image();
+          img.onload = function () { setLogo(file, dataUrl, img.naturalWidth, img.naturalHeight); };
+          img.onerror = function () { setLogo(file, dataUrl, 0, 0); };
+          img.src = dataUrl;
+        };
+        fr.onerror = function () { alert('That image could not be read.'); };
+        fr.readAsDataURL(file);
+      }
+
+      function setLogo(file, dataUrl, w, h) {
+        cust.logo = { dataUrl: dataUrl, name: file.name || 'logo', type: file.type || '', w: w, h: h };
+        push(cust);
+        paint();
       }
 
       /* -- save / load --------------------------------------------------- */
@@ -459,6 +553,11 @@
           return;
         }
         if (t.id === 'cd-lib') return;              // loading is explicit
+        if (t.id === 'cd-logo-file') {
+          if (t.files && t.files[0]) readLogo(t.files[0]);
+          t.value = '';
+          return;
+        }
         if (t.id === 'cd-file') {
           if (t.files && t.files[0]) loadFile(t.files[0]);
           t.value = '';
@@ -488,6 +587,10 @@
           if (!cust.contacts.length) cust.contacts = [blankContact()];
           push(cust);
           paint();
+        } else if (act === 'logo-pick') {
+          pickLogo();
+        } else if (act === 'logo-clear') {
+          clearLogo();
         } else if (act === 'save') {
           saveCustomer();
         } else if (act === 'load') {
@@ -495,10 +598,8 @@
         }
       }
 
-      /* A change from elsewhere — project opened, closed or edited.
-         Repaint now if we're on screen; otherwise defer to onShow(). */
       function onProject() {
-        if (selfWrite) return;        // our own write echoing back
+        if (selfWrite) return;
         if (hidden()) { stale = true; return; }
         refresh();
       }
@@ -519,7 +620,6 @@
       SH.bus.on('project:changed', onProject);
 
       this._onShow = function () {
-        // hasProject() may have flipped without a project:changed we saw
         if (stale || open !== projectOpen()) refresh();
       };
 
