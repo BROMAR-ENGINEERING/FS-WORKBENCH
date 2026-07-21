@@ -30,6 +30,14 @@
           so the app attached it, reported status 'saved', and every write
           failed silently. Both restore and reconnect now probe the directory
           and return 'gone', discarding the stale handle.
+   0.13.0 — MINOR: tableStyles.list (TableStyle[]) and
+             reports[docId].tableStyleId (nullable) added to defaults.
+             Back-filled automatically via mergeDefaults(). No adapter
+             API for table styles yet — the tab writes list directly.
+   0.12.0 — MINOR: company.assets[] plus three helpers
+             saveCompanyAsset / companyAssetUrl / deleteCompanyAsset.
+             Files land under <data folder>/assets/company/ — no data URLs.
+             mergeDefaults() covers the schema back-fill.
    0.11.1 — SH.IDB read lazily (same fix as store.js v0.9.3).
    0.10.0 — restoreDataFolder() no longer calls requestPermission(): that needs
           a live user gesture, so at boot it could only fail. It now returns
@@ -92,6 +100,7 @@
       name: '', abn: '', address: '', phone: '', email: '', website: '',
       licence: '',
       logo: null,                  // { file:'assets/logo.png', dataUrl?:'…' }
+      assets: [],                  // company.assets[] — see docs/DATA_MODEL.md
       preparedByDefault: ''
     },
 
@@ -110,7 +119,10 @@
     },
 
     /* per-document report inclusions — written by js/doc-tabs.js */
-    reports: {},
+    reports: {},                 // reports[docId] = { include, sections, tableStyleId }
+
+    /* per-tenant table styles — written by pages/settings/tabs/table-style */
+    tableStyles: { list: [] },
 
     /* custom, non-SISTEMA components */
     customComponents: [],
@@ -782,6 +794,69 @@
       var logo = this.get('company.logo', null);
       if (logo && logo.file && this.dataDirHandle) this.deleteFile(logo.file);
       this.set('company.logo', null);
+    },
+
+    /* ------------------------------------------------------------
+       Company brand assets (0.16.0)
+
+       A named list of extra brand images beyond the single company.logo:
+       approval marks, secondary logos, mono variants, etc. Each entry is
+       { id, label, file, width?, height? }.
+
+       Same storage rules as sections: bytes go on disk under
+       <data folder>/assets/company/, settings.json only carries the path.
+       Never a data URL. Files under this folder that no assets[] entry
+       references are considered orphans and are cleaned by
+       deleteCompanyAsset() alone; a caller must not delete files it did
+       not register.
+       ------------------------------------------------------------ */
+
+    /* Write a File / Blob into <data folder>/assets/company/. Returns the
+       data-folder-relative path. De-dupes filenames if the same name is
+       already in use. Throws with no data folder open — same contract as
+       saveSectionAsset. */
+    saveCompanyAsset: async function (file) {
+      if (!this.dataDirHandle) throw new Error('No data folder is open. Choose one in Settings → Data & Storage.');
+      if (!file) throw new Error('No file supplied.');
+
+      var dir = await this._dir(['assets', 'company'], true);
+      var wanted = safeName(file.name || 'image.png');
+      var parts  = splitExt(wanted);
+      var name = wanted, n = 0;
+
+      /* eslint-disable no-constant-condition */
+      while (true) {
+        var taken = true;
+        try { await dir.getFileHandle(name, { create: false }); }
+        catch (e) { taken = false; }
+        if (!taken) break;
+        n += 1;
+        name = parts.base + '-' + n + parts.ext;
+        if (n > 999) throw new Error('Too many files named ' + wanted);
+      }
+
+      var fh = await dir.getFileHandle(name, { create: true });
+      var w  = await fh.createWritable();
+      await w.write(file);
+      await w.close();
+
+      return ['assets', 'company', name].join('/');
+    },
+
+    /* Resolve a company asset path to a blob: URL. Uses the shared fileUrl()
+       which folds case, matching resolve() and exists(). Caller revokes the
+       URL when the image is unmounted. Throws with no path or no folder. */
+    companyAssetUrl: function (relPath) {
+      if (!relPath) return Promise.reject(new Error('companyAssetUrl() needs a path.'));
+      return this.fileUrl(relPath);
+    },
+
+    /* Remove a company asset file from disk. Fire-and-forget: resolves
+       true/false and never rejects, matching deleteFile(). Callers still
+       remove the entry from company.assets[] themselves. */
+    deleteCompanyAsset: function (relPath) {
+      if (!relPath) return Promise.resolve(false);
+      return this.deleteFile(relPath);
     },
 
     /* ------------------------------------------------------------
