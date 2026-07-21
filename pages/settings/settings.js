@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — Settings page
+   FS Workbench — Settings page
    File:     pages/settings/settings.js
-   Rev:      0.6.2
+   Rev:      0.6.3
    Updated:  2026-07-09
    Requires: core.js (SH.tabbedPage)
    --------------------------------------------------------------
