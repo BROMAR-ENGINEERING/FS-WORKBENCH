@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — Settings › Report Theme
+   FS Workbench — Settings › Report Theme
    File:     pages/settings/tabs/report-theme/report-theme.js
-   Rev:      0.7.0
+   Rev:      0.7.1
    Updated:  2026-07-09
    Requires: core.js, settings.js, theme.js
    --------------------------------------------------------------
@@ -21,6 +21,9 @@
    data / defaults for a new theme), not app chrome. Every rule in the
    scoped stylesheet uses CSS variables from css/app.css.
 
+   0.7.1 — removed "BroSafe" branding (product renamed FS Workbench at v0.12.0).
+          Import alert now reads SH.APP_NAME; the data-folder hint no longer
+          names the product; comments/logs say FS Workbench.
    0.7.0 — gradient bands gain a direction: left-to-right or top-to-bottom.
           New keys page.headerGradientDir / page.footerGradientDir ('lr' | 'tb'),
           back-filled to 'lr'. bandCss() is local again until SH.theme knows
@@ -226,7 +229,7 @@ SH.registerTab('settings', 'report-theme', {
         if (!x || x.builtin) return;                       // never overwrite a shipped theme
         if (typeof s.writeJSON === 'function') {
           try { s.writeJSON(THEME_DIR + x.id + '.json', x); }
-          catch (err) { console.warn('BroSafe: theme not written to disk —', err); }
+          catch (err) { console.warn('FS Workbench: theme not written to disk —', err); }
         }
       }
       return {
@@ -244,7 +247,7 @@ SH.registerTab('settings', 'report-theme', {
           s.set('themes.list', list);
           if (typeof s.deleteFile === 'function') {
             try { s.deleteFile(THEME_DIR + id + '.json'); }
-            catch (err) { console.warn('BroSafe: theme file not removed —', err); }
+            catch (err) { console.warn('FS Workbench: theme file not removed —', err); }
           }
           return later(true);
         },
@@ -391,7 +394,7 @@ SH.registerTab('settings', 'report-theme', {
         repaintAll();
       })['catch'](function (err) {
         // No data folder chosen yet — stay usable with the shipped default.
-        console.warn('BroSafe: could not load themes —', err);
+        console.warn('FS Workbench: could not load themes —', err);
       });
     }
 
@@ -607,7 +610,7 @@ SH.registerTab('settings', 'report-theme', {
 
     /* --- 10. actions ----------------------------------------------------- */
     function failed(err) {
-      console.warn('BroSafe: theme save failed —', err);
+      console.warn('FS Workbench: theme save failed —', err);
       alert('The theme could not be saved.\n\n' + (err && err.message ? err.message : err) +
             '\n\nChoose a data folder in Settings → Data & Storage.');
     }
@@ -694,7 +697,7 @@ SH.registerTab('settings', 'report-theme', {
         try { t = JSON.parse(r.result); }
         catch (err) { alert('That file is not valid JSON.'); return; }
         if (!t || !t.text || !t.page || !t.text.body) {
-          alert('That file is not a BroSafe report theme.');
+          alert('That file is not an ' + SH.APP_NAME + ' report theme.');
           return;
         }
         t.id = uid();
@@ -781,7 +784,7 @@ SH.registerTab('settings', 'report-theme', {
       SH.el('div', { class: 'card' },
         SH.el('h2', { class: 'section' }, 'Report theme'),
         SH.el('p', { class: 'hint' },
-          'Controls how generated reports look. Themes are saved to the BroSafe data folder, ' +
+          'Controls how generated reports look. Themes are saved to the data folder, ' +
           'not to a project, so every job can use any theme.'),
         SH.el('div', { class: 'bar' }, pickerBox, nickBox, revEl, stateEl),
         builtinHint
