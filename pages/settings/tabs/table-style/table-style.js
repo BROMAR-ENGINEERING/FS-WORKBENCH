@@ -1,7 +1,7 @@
 /* ==============================================================
    BroSafe — Settings › Table Style
    File:     pages/settings/tabs/table-style/table-style.js
-   Rev:      0.1.0
+   Rev:      0.2.0
    Updated:  2026-07-09
    Requires: core.js, settings.js
    --------------------------------------------------------------
@@ -24,6 +24,14 @@
    data / defaults), not app chrome. Every rule in the scoped stylesheet
    uses CSS variables from css/app.css.
 
+   0.2.0 — line weight added to the border group (border.width, px). Width
+          greys out when Style is "No lines". Disabled groups now dim harder
+          and show a "turn on to edit" cue so a gated section no longer reads
+          as broken.
+   0.1.1 — core confirmed it writes tableStyles.list directly and declined the
+          list/save/delete adapter. Removed the dead adapter probe; STYLE_API is
+          now just the settings-key path. writeJSON / deleteFile hooks kept —
+          those are real data-folder capabilities core has yet to ship.
    0.1.0 — first cut. Named table styles with add / remove / save / revert /
           rename + revision, JSON export / import, live preview. Storage
           behind one STYLE_API adapter (see below) pending a core API.
@@ -51,6 +59,13 @@ SH.registerTab('settings', 'table-style', {
       { key: 'grid',       label: 'Full grid'        },
       { key: 'horizontal', label: 'Horizontal only'  },
       { key: 'none',       label: 'No lines'         }
+    ];
+
+    var WIDTHS = [
+      { v: 0.5, label: 'Hairline (0.5px)' },
+      { v: 1,   label: 'Thin (1px)'       },
+      { v: 1.5, label: 'Medium (1.5px)'   },
+      { v: 2,   label: 'Thick (2px)'      }
     ];
 
     var WEIGHTS = [
@@ -88,7 +103,7 @@ SH.registerTab('settings', 'table-style', {
         body:     { color: '#222222', fontScale: 1.0, density: 'normal' },
         zebra:    { on: true,  color: '#F4F4F4' },
         firstCol: { on: false, bg: '#EDEDED', color: '#222222', weight: 600 },
-        border:   { style: 'horizontal', color: '#CFCFCF' }
+        border:   { style: 'horizontal', width: 1, color: '#CFCFCF' }
       };
     }
 
@@ -106,22 +121,13 @@ SH.registerTab('settings', 'table-style', {
 
     /* --------------------------------------------------------------
        2. STYLE_API — the one place that touches storage.
-       Tries, in order:
-         1. SH.settings.listTableStyles / saveTableStyle / deleteTableStyle
-         2. the settings key tableStyles.list (+ writeJSON per style if present)
-       All calls treated as possibly async. Delete the losing branch once
-       core settles this.
+       Core writes tableStyles.list directly and declined a list/save/delete
+       adapter, so that is the whole implementation. The per-style file
+       writes (writeJSON / deleteFile) are best-effort: they fire only if
+       the data-folder file API is present, and are harmless until it is.
        -------------------------------------------------------------- */
     var STYLE_API = (function () {
       var s = SH.settings;
-
-      if (s && typeof s.listTableStyles === 'function' && typeof s.saveTableStyle === 'function') {
-        return {
-          list:   function ()   { return later(s.listTableStyles()); },
-          save:   function (x)  { return later(s.saveTableStyle(x)); },
-          remove: function (id) { return later(s.deleteTableStyle(id)); }
-        };
-      }
 
       function read() {
         var list = s.get('tableStyles.list', null);
@@ -189,8 +195,13 @@ SH.registerTab('settings', 'table-style', {
         'font-size:12px;text-transform:uppercase}' +
       '.t-tbl .inline{display:flex;flex-wrap:wrap;align-items:center;gap:10px}' +
       '.t-tbl .inline select,.t-tbl .inline input[type=number]{flex:0 0 auto}' +
-      '.t-tbl .grp.off{opacity:.45}' +
+      '.t-tbl .grp{position:relative}' +
+      '.t-tbl .grp.off{opacity:.4}' +
       '.t-tbl .grp.off input,.t-tbl .grp.off select{pointer-events:none}' +
+      '.t-tbl .grp.off .row{filter:grayscale(1)}' +
+      '.t-tbl .grp .offcue{display:none;font-size:11px;font-style:italic;color:var(--muted);' +
+        'margin:2px 0 0}' +
+      '.t-tbl .grp.off .offcue{display:block}' +
       '.t-tbl .chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;' +
         'color:var(--muted);cursor:pointer;user-select:none}' +
       '.t-tbl .chk input{margin:0;cursor:pointer}' +
@@ -430,6 +441,7 @@ SH.registerTab('settings', 'table-style', {
     zebraGrp.appendChild(SH.el('div', { class: 'subhead' }, 'Zebra shading', zebraToggle));
     zebraGrp.appendChild(SH.el('div', { class: 'row' },
       SH.el('label', null, 'Shade'), zebraColour));
+    zebraGrp.appendChild(SH.el('p', { class: 'offcue' }, 'Turn on “Alternate row shading” to edit.'));
 
     /* --- 11. First-column group -------------------------------------- */
     var fcBg     = colourControl(function () { return draft.firstCol.bg; },    function (v) { draft.firstCol.bg = v; });
@@ -444,17 +456,43 @@ SH.registerTab('settings', 'table-style', {
     fcGrp.appendChild(SH.el('div', { class: 'row' }, SH.el('label', null, 'Fill'),   fcBg));
     fcGrp.appendChild(SH.el('div', { class: 'row' }, SH.el('label', null, 'Text'),   fcColor));
     fcGrp.appendChild(SH.el('div', { class: 'row' }, SH.el('label', null, 'Weight'), fcWeight));
+    fcGrp.appendChild(SH.el('p', { class: 'offcue' }, 'Turn on “Style the first column” to edit.'));
 
-    /* --- 12. Borders group ------------------------------------------- */
+    /* --- 12. Borders group -------------------------------------------
+       Width and colour only mean something when there are lines to draw,
+       so they dim when Style is "No lines". */
+    var borderDeps = SH.el('div', { class: 'grp' });
+
+    var borderStyleSel = selectControl(
+      BORDERS.map(function (b) { return { v: b.key, label: b.label }; }),
+      function () { return draft.border.style; },
+      function (v) { draft.border.style = v; paintBorderDeps(); });
+
+    var borderWidthSel = selectControl(
+      WIDTHS.map(function (w) { return { v: w.v, label: w.label }; }),
+      function () { return draft.border.width; },
+      function (v) { draft.border.width = parseFloat(v); });
+
+    var borderColour = colourControl(
+      function () { return draft.border.color; },
+      function (v) { draft.border.color = v; });
+
+    controls.push(borderStyleSel, borderWidthSel, borderColour);
+
+    function paintBorderDeps() {
+      borderDeps.classList.toggle('off', draft.border.style === 'none');
+    }
+
+    borderDeps.appendChild(SH.el('div', { class: 'row' }, SH.el('label', null, 'Weight'), borderWidthSel));
+    borderDeps.appendChild(SH.el('div', { class: 'row' }, SH.el('label', null, 'Colour'), borderColour));
+    borderDeps.appendChild(SH.el('p', { class: 'offcue' }, 'Choose a line style other than “No lines” to edit.'));
+
     var borderGrp = SH.el('div', null,
       SH.el('div', { class: 'subhead' }, 'Lines'),
-      row('Style', selectControl(
-        BORDERS.map(function (b) { return { v: b.key, label: b.label }; }),
-        function () { return draft.border.style; },
-        function (v) { draft.border.style = v; })),
-      row('Colour', colourControl(function () { return draft.border.color; },
-                                  function (v) { draft.border.color = v; }))
+      SH.el('div', { class: 'row' }, SH.el('label', null, 'Style'), borderStyleSel),
+      borderDeps
     );
+    paintBorderDeps();
 
     /* --- 13. actions ------------------------------------------------- */
     function failed(err) {
@@ -595,8 +633,9 @@ SH.registerTab('settings', 'table-style', {
       var fs = (10.5 * (draft.body.fontScale || 1)).toFixed(2) + 'pt';
 
       var line;
-      if (draft.border.style === 'grid')            line = '1px solid ' + draft.border.color;
-      else if (draft.border.style === 'horizontal') line = '1px solid ' + draft.border.color;
+      var w = (draft.border.width || 1) + 'px';
+      if (draft.border.style === 'grid')            line = w + ' solid ' + draft.border.color;
+      else if (draft.border.style === 'horizontal') line = w + ' solid ' + draft.border.color;
       else                                          line = '0';
 
       var css = '';
@@ -637,6 +676,7 @@ SH.registerTab('settings', 'table-style', {
       paintPicker();
       nameInput.value = draft.name;
       controls.forEach(function (c) { if (c.repaint) c.repaint(); });
+      paintBorderDeps();
       paintPreview();
       paintStatus();
     }
