@@ -1,7 +1,7 @@
 /* ==============================================================
-   BroSafe — Settings › Table Style
+   FS Workbench — Settings › Table Style
    File:     pages/settings/tabs/table-style/table-style.js
-   Rev:      0.2.0
+   Rev:      0.2.1
    Updated:  2026-07-09
    Requires: core.js, settings.js
    --------------------------------------------------------------
@@ -24,6 +24,8 @@
    data / defaults), not app chrome. Every rule in the scoped stylesheet
    uses CSS variables from css/app.css.
 
+   0.2.1 — removed "BroSafe" branding (product renamed FS Workbench at v0.12.0).
+          User-facing text now reads SH.APP_NAME; comments/logs say FS Workbench.
    0.2.0 — line weight added to the border group (border.width, px). Width
           greys out when Style is "No lines". Disabled groups now dim harder
           and show a "turn on to edit" cue so a gated section no longer reads
@@ -137,7 +139,7 @@ SH.registerTab('settings', 'table-style', {
         if (!x || x.builtin) return;
         if (typeof s.writeJSON === 'function') {
           try { s.writeJSON(STYLE_DIR + x.id + '.json', x); }
-          catch (err) { console.warn('BroSafe: table style not written —', err); }
+          catch (err) { console.warn('FS Workbench: table style not written —', err); }
         }
       }
       return {
@@ -155,7 +157,7 @@ SH.registerTab('settings', 'table-style', {
           s.set('tableStyles.list', list);
           if (typeof s.deleteFile === 'function') {
             try { s.deleteFile(STYLE_DIR + id + '.json'); }
-            catch (err) { console.warn('BroSafe: table style file not removed —', err); }
+            catch (err) { console.warn('FS Workbench: table style file not removed —', err); }
           }
           return later(true);
         }
@@ -273,7 +275,7 @@ SH.registerTab('settings', 'table-style', {
         if (focusInside()) { pending = true; return; }
         repaintAll();
       })['catch'](function (err) {
-        console.warn('BroSafe: could not load table styles —', err);
+        console.warn('FS Workbench: could not load table styles —', err);
       });
     }
 
@@ -496,7 +498,7 @@ SH.registerTab('settings', 'table-style', {
 
     /* --- 13. actions ------------------------------------------------- */
     function failed(err) {
-      console.warn('BroSafe: table style save failed —', err);
+      console.warn('FS Workbench: table style save failed —', err);
       alert('The table style could not be saved.\n\n' + (err && err.message ? err.message : err) +
             '\n\nChoose a data folder in Settings → Data & Storage.');
     }
@@ -573,7 +575,7 @@ SH.registerTab('settings', 'table-style', {
         try { t = JSON.parse(r.result); }
         catch (err) { alert('That file is not valid JSON.'); return; }
         if (!t || !t.header || !t.body || !t.border) {
-          alert('That file is not a BroSafe table style.');
+          alert('That file is not an ' + SH.APP_NAME + ' table style.');
           return;
         }
         t.id = uid(); t.builtin = false; t.rev = t.rev || 1; t.updated = today();
