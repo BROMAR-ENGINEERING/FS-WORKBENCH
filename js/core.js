@@ -88,6 +88,25 @@ window.SH = window.SH || {};
     });
   };
 
+  /* --- LOTO energy types + colour mapping ------------------------
+     One authoritative list, so the Asset Register tab and the
+     report generator cannot drift. Colours follow the industry
+     conventions on ANSI/OSHA and manufacturer LOTO tag sheets. */
+  SH.LOTO_ENERGY = [
+    { id: 'electrical',       label: 'Electrical',       colour: '#c0392b' },  // red
+    { id: 'pneumatic',        label: 'Pneumatic',        colour: '#2980b9' },  // blue
+    { id: 'hydraulic',        label: 'Hydraulic',        colour: '#8e44ad' },  // purple
+    { id: 'water',            label: 'Water',            colour: '#3498db' },  // light blue
+    { id: 'gas',              label: 'Gas',              colour: '#f39c12' },  // amber
+    { id: 'steam',            label: 'Steam',            colour: '#e67e22' },  // orange
+    { id: 'thermal',          label: 'Thermal',          colour: '#d35400' },  // dark orange
+    { id: 'gravity',          label: 'Gravity',          colour: '#7f8c8d' },  // grey
+    { id: 'stored-pressure',  label: 'Stored pressure',  colour: '#16a085' },  // teal
+    { id: 'chemical',         label: 'Chemical',         colour: '#27ae60' },  // green
+    { id: 'mechanical',       label: 'Mechanical',       colour: '#34495e' },  // slate
+    { id: 'other',            label: 'Other',            colour: '#95a5a6' }   // muted
+  ];
+
   /* --- application revision (single source of truth; shown in header) --- */
   SH.VERSION = '0.13.0';
   SH.BUILD   = '2026-07-09';
