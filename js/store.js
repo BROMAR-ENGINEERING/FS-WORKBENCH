@@ -30,6 +30,13 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.11.1 — MINOR schema:
+             • project.loto.procedures[] — Procedure register, distinct
+               from assets. Item shape maintained by the Procedures tab.
+             • project.loto.assets[].parentId — null for top-level, or
+               another asset id to nest as a sub-asset. Flat storage,
+               tree rendering in the UI. Back-filled to null so existing
+               top-level assets pick it up transparently.
    0.11.0 — MAJOR: schema string bumped fsworkbench.project/1 -> /2.
              Photos and other binary attachments now live under
              <project>/assets/, referenced by relative path. New API:
@@ -249,8 +256,9 @@
           componentChecks: []   // per-device-type checklist records; shape TBD by the tab
         }
       },
-      loto: {                    // LOTO Asset Register (0.15.7)
-        assets: []              // per-asset LOTO procedure records; shape TBD by the tab
+      loto: {                    // LOTO registers
+        assets:     [],         // Asset Register — physical machines/sub-assets
+        procedures: []          // Procedure Register — LOTO procedures
       },
       lists: { deviceTypes: DEFAULT_DEVICE_TYPES.slice() }
     };
@@ -504,11 +512,18 @@
         p.validation.phase4.componentChecks = [];
       }
 
-      /* project.loto.assets (0.15.7) — LOTO Asset Register. Item shape
-         TBD by the LOTO asset-register tab. project.loto itself is
-         created if absent so downstream reads never see undefined. */
+      /* project.loto.assets (0.15.7) + parentId (0.16.1)
+         parentId is null for top-level assets, or another asset id to
+         nest under. Renders as a tree in the UI, stored flat.
+         project.loto.procedures (0.16.1) — Procedure register. Item
+         shape maintained by the Procedures tab; only defensive back-fill
+         at the top level here. */
       if (!p.loto || typeof p.loto !== 'object') p.loto = {};
       if (!Array.isArray(p.loto.assets)) p.loto.assets = [];
+      p.loto.assets.forEach(function (a) {
+        if (a && typeof a === 'object' && a.parentId === undefined) a.parentId = null;
+      });
+      if (!Array.isArray(p.loto.procedures)) p.loto.procedures = [];
 
       /* shared Device Register (0.14.0) + wiring[].side (0.15.1)
          side defaults to 'field'. The Pilz import parser writes side
