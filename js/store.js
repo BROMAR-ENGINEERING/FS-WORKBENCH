@@ -30,6 +30,27 @@
    stamps savedBy + savedAt and bumps rev; openProject() warns if the
    file on disk is newer than what we loaded.
 
+   0.11.0 — MAJOR: schema string bumped fsworkbench.project/1 -> /2.
+             Photos and other binary attachments now live under
+             <project>/assets/, referenced by relative path. New API:
+             saveProjectAsset(subPath, file) / projectAssetUrl(relPath)
+             / deleteProjectAsset(relPath). All mirror the equivalents
+             on SH.settings, so consumers see a consistent pattern.
+             Migration from /1 is silent: any inline base64 photos
+             on LOTO isolation points are decoded and written to
+             <project>/assets/loto/<assetId>/ on first open, then
+             replaced with { relPath, name, w, h }. Migration errors
+             are logged; the photo is left untouched. Legacy /1 files
+             load without a schema warning and are upgraded on next
+             save. brosafe.project/1 continues to load transparently.
+   0.10.10 — MINOR schema: project.loto.assets[] — LOTO Asset Register.
+              Item shape TBD by the tab. Photos are held inline as base64
+              data URLs with a per-photo cap (500 KB) enforced by the tab,
+              matching project.customer.logo. A per-project assets/ folder
+              was considered and deliberately not adopted — see the design
+              note in DATA_MODEL.md.
+   0.10.9 — MINOR schema: validation.phase4 with sfConfirmations[]
+             and componentChecks[]. Item shapes TBD by the Phase 4 tab.
    0.10.8 — MINOR schema: project.customer + full defensive back-fill.
              Formalises the shape the Customer Details tab has been
              writing since its Rev 0.8.0; overdue documentation, not a
@@ -98,11 +119,15 @@
    ============================================================== */
 (function (SH) {
 
-  var SCHEMA   = 'fsworkbench.project/1';
+  var SCHEMA   = 'fsworkbench.project/2';
   /* Files written before the rename. Read them, warn about nothing, and
      upgrade the string on the next save. A renamed schema that rejects its
      own old files is a data-loss bug wearing a cosmetics costume. */
-  var LEGACY_SCHEMAS = ['brosafe.project/1'];
+  /* /1 held photos as inline base64. /2 stores them under
+     <project>/assets/. Migration runs silently on first open of a
+     /1 project; see _migrateAssets(). Any legacy schema string in
+     LEGACY_SCHEMAS is accepted on read and upgraded on next save. */
+  var LEGACY_SCHEMAS = ['brosafe.project/1', 'fsworkbench.project/1'];
 
   /* Default device types for project.lists.deviceTypes (0.14.3).
      Kept as a module constant so blankProject() and _normalize() cannot
@@ -218,7 +243,14 @@
             edm:                [],
             special:            []
           }
+        },
+        phase4: {                // category-verification state for the Phase 4 tab
+          sfConfirmations: [],  // per-SF checklist + result records; shape TBD by the tab
+          componentChecks: []   // per-device-type checklist records; shape TBD by the tab
         }
+      },
+      loto: {                    // LOTO Asset Register (0.15.7)
+        assets: []              // per-asset LOTO procedure records; shape TBD by the tab
       },
       lists: { deviceTypes: DEFAULT_DEVICE_TYPES.slice() }
     };
@@ -462,6 +494,22 @@
         if (!Array.isArray(t3.special))            t3.special            = [];
       }
 
+      /* validation.phase4 (0.15.6) — two arrays holding the tab's
+         checklists. Item shapes TBD by the Phase 4 tab. */
+      if (!p.validation.phase4) p.validation.phase4 = {};
+      if (!Array.isArray(p.validation.phase4.sfConfirmations)) {
+        p.validation.phase4.sfConfirmations = [];
+      }
+      if (!Array.isArray(p.validation.phase4.componentChecks)) {
+        p.validation.phase4.componentChecks = [];
+      }
+
+      /* project.loto.assets (0.15.7) — LOTO Asset Register. Item shape
+         TBD by the LOTO asset-register tab. project.loto itself is
+         created if absent so downstream reads never see undefined. */
+      if (!p.loto || typeof p.loto !== 'object') p.loto = {};
+      if (!Array.isArray(p.loto.assets)) p.loto.assets = [];
+
       /* shared Device Register (0.14.0) + wiring[].side (0.15.1)
          side defaults to 'field'. The Pilz import parser writes side
          explicitly at import time; this back-fill only touches entries
@@ -555,6 +603,13 @@
       catch (e) { throw new Error('"' + folder + '" is not a ' + SH.APP_NAME + ' project (no project.json).'); }
 
       var p = this._normalize(JSON.parse(await (await fh.getFile()).text()));
+      /* Silent asset migration from /1 to /2 runs before we touch the file
+         on disk. If it makes changes, they get saved on the next _touch. */
+      if (p.schema === 'brosafe.project/1' || p.schema === 'fsworkbench.project/1') {
+        try { await this._migrateAssets(p); }
+        catch (e) { console.warn(SH.APP_NAME + ': asset migration errored —', e); }
+      }
+
       if (p.schema && p.schema !== SCHEMA && LEGACY_SCHEMAS.indexOf(p.schema) === -1) {
         console.warn(SH.APP_NAME + ': project schema ' + p.schema + ', expected ' + SCHEMA);
       }
@@ -823,6 +878,176 @@
       var dir = await this._dir(parts, false);
       await dir.removeEntry(name);
     },
+
+    /* ------------------------------------------------------------
+       Project asset API (/2 schema)
+
+       Photos and other binary attachments are stored on disk under
+       <project>/assets/<subPath>, then referenced from project.json
+       by a relative path. The photo record shape is:
+
+         { relPath:'assets/loto/ast_x/e1.jpg', name:'e1.jpg', w:1200, h:900 }
+
+       The three helpers mirror SH.settings.saveCompanyAsset etc, so
+       consumers see one consistent pattern for on-disk attachments.
+
+       saveProjectAsset(subPath, file)
+         subPath is the folder inside <project>/assets/, e.g. 'loto/ast_x'.
+         The filename is taken from file.name (safe-named + de-duped).
+         Returns the full path relative to the project folder,
+         e.g. 'assets/loto/ast_x/e1.jpg'.
+
+       projectAssetUrl(relPath)
+         Returns a blob: URL for use as an <img> src. Caller revokes
+         the URL when the image is unmounted.
+
+       deleteProjectAsset(relPath)
+         Removes the file. Fire-and-forget — resolves true/false,
+         never rejects. Missing files count as success (already gone).
+
+       All three throw synchronously if no project is open.
+       ------------------------------------------------------------ */
+
+    saveProjectAsset: async function (subPath, file) {
+      if (!this.dirHandle) throw new Error('No project folder is open.');
+      if (!file) throw new Error('No file supplied.');
+      if (typeof subPath !== 'string' || !subPath.trim()) {
+        throw new Error('saveProjectAsset() needs a non-empty subPath (e.g. "loto/ast_x").');
+      }
+      /* Clean the subPath: drop leading assets/, leading/trailing slashes,
+         empty segments. Never allow ".." — users must not escape assets/. */
+      var raw = String(subPath).replace(/^assets\//, '').split('/').filter(Boolean);
+      /* Refuse to silently strip '..' — that's an attempt to escape assets/. */
+      for (var s = 0; s < raw.length; s++) {
+        if (raw[s] === '..' || raw[s] === '.') {
+          throw new Error('saveProjectAsset() subPath must not contain "." or ".." segments.');
+        }
+      }
+      if (!raw.length) throw new Error('saveProjectAsset() needs a non-empty subPath.');
+      var subParts = raw;
+
+      /* Ensure <project>/assets/<subPath>/ exists */
+      var dir = await this._dir(['assets'].concat(subParts), true);
+
+      /* De-dupe filename in the same way as saveCompanyAsset. */
+      function safe(s) { return String(s || 'image.bin').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120); }
+      function splitExt(s) {
+        var i = s.lastIndexOf('.');
+        if (i <= 0) return { base: s, ext: '' };
+        return { base: s.slice(0, i), ext: s.slice(i) };
+      }
+      var wanted = safe(file.name || 'image.bin');
+      var parts = splitExt(wanted);
+      var name = wanted, n = 0;
+      /* eslint-disable no-constant-condition */
+      while (true) {
+        var taken = true;
+        try { await dir.getFileHandle(name, { create: false }); }
+        catch (e) { taken = false; }
+        if (!taken) break;
+        n += 1;
+        name = parts.base + '-' + n + parts.ext;
+        if (n > 999) throw new Error('Too many files named ' + wanted);
+      }
+
+      var fh = await dir.getFileHandle(name, { create: true });
+      var w  = await fh.createWritable();
+      await w.write(file);
+      await w.close();
+
+      /* Return path relative to the project folder */
+      return ['assets'].concat(subParts).concat([name]).join('/');
+    },
+
+    projectAssetUrl: async function (relPath) {
+      if (!this.dirHandle) throw new Error('No project folder is open.');
+      if (!relPath) throw new Error('projectAssetUrl() needs a path.');
+      var parts = String(relPath).split('/').filter(Boolean);
+      var name = parts.pop();
+      var dir = await this._dir(parts, false);
+      var fh = await dir.getFileHandle(name, { create: false });
+      var file = await fh.getFile();
+      return URL.createObjectURL(file);
+    },
+
+    deleteProjectAsset: async function (relPath) {
+      if (!this.dirHandle) throw new Error('No project folder is open.');
+      if (!relPath) return false;
+      try {
+        var parts = String(relPath).split('/').filter(Boolean);
+        var name = parts.pop();
+        var dir = await this._dir(parts, false);
+        await dir.removeEntry(name);
+        return true;
+      } catch (e) {
+        /* Missing file is success — caller wanted it gone, it is. */
+        if (e && (e.name === 'NotFoundError' || /not\s*found/i.test(e.message || ''))) return false;
+        throw e;
+      }
+    },
+
+    /* ------------------------------------------------------------
+       Migration: /1 -> /2
+
+       Called on open when p.schema === 'fsworkbench.project/1' (or
+       any legacy string that came from a /1 project). Any base64
+       photos on LOTO isolation points are decoded, written to
+       <project>/assets/loto/<assetId>/, and replaced with a
+       { relPath, name, w, h } record.
+
+       Fire-and-forget internally: on failure, we log and leave the
+       photo untouched. The user won't see broken images, just old ones.
+       ------------------------------------------------------------ */
+    _migrateAssets: async function (p) {
+      if (!p || !p.loto || !Array.isArray(p.loto.assets)) return;
+      var self = this, i, j, dirty = false;
+      for (i = 0; i < p.loto.assets.length; i++) {
+        var a = p.loto.assets[i];
+        if (!a || !Array.isArray(a.isolationPoints)) continue;
+        for (j = 0; j < a.isolationPoints.length; j++) {
+          var ip = a.isolationPoints[j];
+          if (!ip || !ip.photo) continue;
+          /* /2 shape: object with relPath. /1 shape: string dataUrl. */
+          if (typeof ip.photo === 'string' && ip.photo.indexOf('data:') === 0) {
+            try {
+              var mig = await self._migrateOnePhoto(ip.photo, a.id || 'unknown', 'photo');
+              if (mig) { ip.photo = mig; dirty = true; }
+            } catch (e) {
+              console.warn(SH.APP_NAME + ': asset migration failed for '
+                           + (a.id || '(no id)') + ' —', e);
+            }
+          }
+        }
+      }
+      return dirty;
+    },
+
+    _migrateOnePhoto: async function (dataUrl, assetId, baseName) {
+      /* Parse the data URL header + decode. */
+      var m = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl);
+      if (!m) return null;
+      var mime = (m[1] || 'application/octet-stream').toLowerCase();
+      var isB64 = !!m[2];
+      var payload = m[3] || '';
+      var bytes;
+      if (isB64) {
+        var bin = atob(payload);
+        bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      } else {
+        bytes = new TextEncoder().encode(decodeURIComponent(payload));
+      }
+      /* Pick an extension from the mime type. */
+      var ext = 'bin';
+      if (mime.indexOf('png')  !== -1) ext = 'png';
+      else if (mime.indexOf('jpeg') !== -1 || mime.indexOf('jpg') !== -1) ext = 'jpg';
+      else if (mime.indexOf('webp') !== -1) ext = 'webp';
+      else if (mime.indexOf('gif')  !== -1) ext = 'gif';
+      var file = new File([bytes], baseName + '.' + ext, { type: mime });
+      var relPath = await this.saveProjectAsset('loto/' + assetId, file);
+      return { relPath: relPath, name: file.name, w: 0, h: 0 };
+    },
+
 
     /* exposed for tests / tabs that need a safe folder name */
     safeFolder: safeFolder
