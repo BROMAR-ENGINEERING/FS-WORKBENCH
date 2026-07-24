@@ -1,7 +1,7 @@
 /* ============================================================================
  * FS Workbench — LOTO › Procedures
  * File    : pages/loto/tabs/procedures/procedures.js
- * Rev     : 0.16.2
+ * Rev     : 0.16.3
  * Updated : 2026-07-24
  *
  * Owns the Procedure Register: a grouped list view of procedures and a
@@ -10,6 +10,8 @@
  *
  * Reads assets and isolation points from the Asset Register by id. Never
  * duplicates that data — the energy table below is a read-only preview.
+ * Areas come from the shared SH.areas service — list/get for reads, pick()
+ * for assignment. No LOTO-local area store, no dependency on Risk Assessment.
  * ---------------------------------------------------------------------------
  * ASSUMPTIONS — confirm these four against the codebase, each is a one-liner:
  *   A1  Tab export shape (bottom of file). Registers via SH.tabs.register if
@@ -132,7 +134,9 @@
   /* == data access ======================================================== */
   function procs() { return SH.store.get('loto.procedures', []) || []; }
   function assets() { return SH.store.get('loto.assets', []) || []; }
-  function areas() { return SH.store.get('loto.areas', []) || []; }
+  /* Areas come from the shared SH.areas service (v0.16.2), never from a
+     LOTO-local store key. Ids are generated centrally and never reused. */
+  function areas() { return (SH.areas && SH.areas.list()) || []; }
 
   function assetById(id) {
     var found = null;
@@ -141,9 +145,20 @@
   }
 
   function areaName(id) {
-    var name = 'Unassigned area';
-    areas().forEach(function (a) { if (a.id === id) name = a.name || a.title || name; });
-    return name;
+    if (!id || !SH.areas) return 'Unassigned area';
+    var a = SH.areas.get(id);
+    return (a && a.name) || 'Unassigned area';
+  }
+
+  function pickArea(initial, onPicked) {
+    if (!SH.areas || typeof SH.areas.pick !== 'function') return;
+    SH.areas.pick({
+      initial: initial || undefined,
+      onResult: function (id) {
+        if (id === null) return;            // cancelled
+        onPicked(id);
+      }
+    });
   }
 
   function assetName(a) {
@@ -342,6 +357,11 @@
     saveProc(rec);
     state.procId = rec.id; state.view = 'editor'; state.unlocked = true;
     render();
+    /* Asset carries no area (LOTO-only job, Risk Assessment never opened) —
+       ask once now rather than leaving it unsorted. */
+    if (!rec.areaId) {
+      pickArea(null, function (id) { rec.areaId = id; flush(rec); render(); });
+    }
   }
 
   function mkStep(text) {
@@ -432,8 +452,16 @@
     cover.appendChild(field('Special precaution', areaInput(proc.cover.specialPrecaution, locked, function (v) { proc.cover.specialPrecaution = v; autosave(proc); }), true));
 
     var primary = assetById((proc.assetIds || [])[0]);
+    cover.appendChild(field('Area', h('div', { class: 'pr-inline' }, [
+      h('span', { class: 'pr-areaval' + (proc.areaId ? '' : ' pr-muted'), text: areaName(proc.areaId) }),
+      !locked ? h('button', { class: 'pr-btn', type: 'button',
+        text: proc.areaId ? 'Change' : 'Set area',
+        onclick: function () {
+          pickArea(proc.areaId, function (id) { proc.areaId = id; flush(proc); render(); });
+        } }) : null
+    ]), true));
     cover.appendChild(h('p', { class: 'pr-muted', text:
-      'Asset: ' + assetName(primary) + (primary && primary.assetNo ? ' · ' + primary.assetNo : '') + ' · Area: ' + areaName(proc.areaId) }));
+      'Asset: ' + assetName(primary) + (primary && primary.assetNo ? ' · ' + primary.assetNo : '') }));
     wrap.appendChild(cover);
 
     /* isolation points */
@@ -638,6 +666,7 @@
     '.pr-input:disabled{opacity:.7}',
     'textarea.pr-area{resize:vertical;min-height:44px}',
     '.pr-inline{display:flex;gap:8px;flex-wrap:wrap;align-items:center}',
+    '.pr-areaval{font-size:.88rem}',
     '.pr-check{display:flex;align-items:center;gap:8px;font-size:.85rem;padding:2px 0}',
     '.pr-picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2px}',
     '.pr-table{width:100%;border-collapse:collapse;font-size:.8rem}',
