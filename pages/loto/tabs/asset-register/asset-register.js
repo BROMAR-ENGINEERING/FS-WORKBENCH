@@ -1,11 +1,14 @@
 /* File:     pages/loto/tabs/asset-register/asset-register.js
-   Rev:      0.2.0
+   Rev:      0.3.0
    Updated:  2026-07-24
    Requires: SH.el · SH.esc · SH.modal · SH.store · SH.bus · SH.LOTO_ENERGY (js/core.js)
-             SH.store.saveProjectAsset / projectAssetUrl / deleteProjectAsset (v0.16.0)
+             SH.areas (v0.16.2) · SH.store.saveProjectAsset / projectAssetUrl /
+             deleteProjectAsset (v0.16.0)
    Purpose:  LOTO Asset Register — view assets as an area/parent tree, add and edit asset
              records with isolation points, energy types, drawing refs and photos.
              Deletes are guarded against references from project.loto.procedures[].
+             Areas are created and picked through SH.areas, so a LOTO-only job never
+             needs to open Risk Assessment.
 */
 (function () {
   'use strict';
@@ -142,7 +145,13 @@
 
   function assets()     { return SH.store.get('loto.assets', []) || []; }
   function procedures() { return SH.store.get('loto.procedures', []) || []; }
-  function areas()      { return SH.store.get('areas', []) || []; }
+  function areas()      { return SH.areas.list() || []; }
+
+  function areaName(id) {
+    if (!id) { return ''; }
+    var a = SH.areas.get(id);
+    return (a && a.name) ? a.name : '';
+  }
 
   function blankAsset() {
     return {
@@ -275,6 +284,10 @@
     '.loto-ar .ar-lockrow input[type=number]{width:80px}',
     '.loto-ar .ar-foot{display:flex;gap:8px;margin-top:16px;padding-top:14px;',
       'border-top:1px solid var(--line)}',
+    '.loto-ar .ar-arearow{display:flex;gap:8px;align-items:center}',
+    '.loto-ar .ar-area{flex:1;min-width:0;padding:6px 10px;border:1px solid var(--line);',
+      'border-radius:6px;background:var(--card)}',
+    '.loto-ar .ar-area.ar-none{color:var(--muted)}',
     '.loto-ar .ar-reflist{margin:6px 0 12px;padding-left:20px}',
     '.loto-ar .ar-reflist li{margin-bottom:3px}'
   ].join('');
@@ -408,14 +421,30 @@
         groups.push({ id: ars[i].id, name: ars[i].name || ars[i].id, items: [] });
       }
       var loose = { id: '', name: 'Unassigned', items: [] };
+      var orphanGroups = [];
 
       for (i = 0; i < roots.length; i++) {
-        var placed = false;
+        var placed = false, aid = roots[i].areaId || '';
         for (j = 0; j < groups.length; j++) {
-          if (groups[j].id === roots[i].areaId) { groups[j].items.push(roots[i]); placed = true; break; }
+          if (groups[j].id === aid) { groups[j].items.push(roots[i]); placed = true; break; }
         }
-        if (!placed) { loose.items.push(roots[i]); }
+        if (placed) { continue; }
+
+        /* An areaId that SH.areas.list() does not return still gets its own
+           heading, labelled with the raw id. Folding it into "Unassigned" would
+           hide a broken reference instead of showing it. */
+        if (aid) {
+          for (j = 0; j < orphanGroups.length; j++) {
+            if (orphanGroups[j].id === aid) { orphanGroups[j].items.push(roots[i]); placed = true; break; }
+          }
+          if (!placed) {
+            orphanGroups.push({ id: aid, name: 'Unknown area (' + aid + ')', items: [roots[i]] });
+          }
+        } else {
+          loose.items.push(roots[i]);
+        }
       }
+      for (i = 0; i < orphanGroups.length; i++) { groups.push(orphanGroups[i]); }
       groups.push(loose);
 
       for (i = 0; i < groups.length; i++) {
@@ -688,19 +717,13 @@
       var self = this, d = this._draft, i;
       var wrap = box('');
 
-      var areaOpts = [{ id: '', label: '— unassigned —' }];
-      var ars = areas();
-      for (i = 0; i < ars.length; i++) {
-        areaOpts.push({ id: ars[i].id, label: ars[i].name || ars[i].id });
-      }
-
       wrap.appendChild(box('card',
         E('h2', { class: 'section' }, 'Identification'),
         box('grid2',
           field('Asset number', input('text', d.assetNumber, function (v) { d.assetNumber = v; },
             { placeholder: 'LRS 125' })),
-          field('Area / location', select(areaOpts, d.areaId, function (v) { d.areaId = v; }),
-            ars.length ? '' : 'No areas defined — add them in Risk Assessment › Areas & Assets.')),
+          field('Area / location', this._areaPicker(),
+            'Choose an existing area or type a new one — no need to open Risk Assessment.')),
         field('Asset description', input('text', d.description, function (v) { d.description = v; },
           { placeholder: 'LRS 1 Cooling Water' })),
         field('Parent asset',
@@ -766,6 +789,37 @@
         btn('Cancel', function () { self._confirmDiscard(function () { self._toList(); }); }, 'ghost')));
 
       return wrap;
+    },
+
+    /* Area selection goes through SH.areas so a LOTO-only job can create one on
+       the spot, and id generation stays in one place. */
+    _areaPicker: function () {
+      var self = this, d = this._draft;
+      var label = E('span', { class: 'ar-area' }, '');
+
+      function paint() {
+        var name = areaName(d.areaId);
+        if (!d.areaId)  { label.textContent = 'Unassigned'; label.className = 'ar-area ar-none'; }
+        else if (!name) { label.textContent = 'Unknown area (' + d.areaId + ')';
+                          label.className = 'ar-area ar-due'; }
+        else            { label.textContent = name; label.className = 'ar-area'; }
+      }
+      paint();
+
+      var row = box('ar-arearow', label,
+        btn('Choose…', function () {
+          SH.areas.pick({
+            initial: d.areaId || undefined,
+            onResult: function (id) {
+              if (id === null) { return; }   /* cancelled */
+              d.areaId = id;
+              paint();
+            }
+          });
+        }, 'ghost sm'));
+
+      row.appendChild(btn('Clear', function () { d.areaId = ''; paint(); }, 'ghost sm'));
+      return row;
     },
 
     _renderLocks: function () {
