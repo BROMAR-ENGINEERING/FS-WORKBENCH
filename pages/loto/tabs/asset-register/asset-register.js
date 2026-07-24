@@ -1,10 +1,11 @@
 /* File:     pages/loto/tabs/asset-register/asset-register.js
-   Rev:      0.1.0
+   Rev:      0.2.0
    Updated:  2026-07-24
    Requires: SH.el · SH.esc · SH.modal · SH.store · SH.bus · SH.LOTO_ENERGY (js/core.js)
              SH.store.saveProjectAsset / projectAssetUrl / deleteProjectAsset (v0.16.0)
-   Purpose:  LOTO Asset Register — view assets grouped by area, add and edit asset
+   Purpose:  LOTO Asset Register — view assets as an area/parent tree, add and edit asset
              records with isolation points, energy types, drawing refs and photos.
+             Deletes are guarded against references from project.loto.procedures[].
 */
 (function () {
   'use strict';
@@ -21,7 +22,7 @@
   function box(cls) {
     var kids = Array.prototype.slice.call(arguments, 1);
     var node = E('div', cls ? { class: cls } : null);
-    for (var i = 0; i < kids.length; i++) { if (kids[i]) node.appendChild(kids[i]); }
+    for (var i = 0; i < kids.length; i++) { if (kids[i]) { node.appendChild(kids[i]); } }
     return node;
   }
 
@@ -66,6 +67,8 @@
     return E('button', { class: 'btn ' + (cls || ''), onClick: onClick }, label);
   }
 
+  function trim(s) { return String(s == null ? '' : s).replace(/^\s+|\s+$/g, ''); }
+
   /* ---------------------------------------------------- energy types (core.js) */
 
   function energyList() {
@@ -83,18 +86,18 @@
 
   /* Signal tokens only — no literal colours. Unknown ids fall back to muted. */
   var ENERGY_TOKEN = {
-    electrical:       '--amber',
-    pneumatic:        '--steel',
-    'stored-pressure':'--steel',
-    hydraulic:        '--orange',
-    water:            '--steel',
-    gas:              '--orange',
-    steam:            '--fail',
-    thermal:          '--fail',
-    chemical:         '--orange',
-    gravity:          '--muted',
-    mechanical:       '--muted',
-    other:            '--muted'
+    electrical:        '--amber',
+    pneumatic:         '--steel',
+    'stored-pressure': '--steel',
+    hydraulic:         '--orange',
+    water:             '--steel',
+    gas:               '--orange',
+    steam:             '--fail',
+    thermal:           '--fail',
+    chemical:          '--orange',
+    gravity:           '--muted',
+    mechanical:        '--muted',
+    other:             '--muted'
   };
 
   function energySwatch(id) {
@@ -137,19 +140,14 @@
 
   /* --------------------------------------------------------------- data access */
 
-  function assets()  { return SH.store.get('loto.assets', []) || []; }
-  function areas()   { return SH.store.get('areas', []) || []; }
-
-  function areaName(id) {
-    var a = areas();
-    for (var i = 0; i < a.length; i++) { if (a[i].id === id) { return a[i].name || a[i].id; } }
-    return '';
-  }
+  function assets()     { return SH.store.get('loto.assets', []) || []; }
+  function procedures() { return SH.store.get('loto.procedures', []) || []; }
+  function areas()      { return SH.store.get('areas', []) || []; }
 
   function blankAsset() {
     return {
       id: uid('ast_'),
-      assetNumber: '', description: '', areaId: '',
+      assetNumber: '', description: '', areaId: '', parentId: null,
       procedureId: '', procedureDesc: '',
       drawingRefs: [], specialPrecaution: '',
       lastRevised: '', nextAudit: '',
@@ -178,6 +176,66 @@
     return d.getTime() < Date.now();
   }
 
+  function procTitle(p) { return p.title || p.id || '(untitled procedure)'; }
+
+  /* ------------------------------------------------------- reference scanning
+     project.loto.procedures[] references assets two ways:
+       assetIds[]          — which assets the procedure covers
+       isolationPointIds   — null means EVERY point on those assets (an implicit
+                             reference), an array means only those point ids.
+     A null-scoped procedure therefore references points it never names. A guard
+     that only inspects the array will happily delete a point that is printed on
+     a live procedure.                                                          */
+
+  function procsForAsset(assetId) {
+    var all = procedures(), out = [], i, j;
+    for (i = 0; i < all.length; i++) {
+      var ids = all[i].assetIds || [];
+      for (j = 0; j < ids.length; j++) {
+        if (ids[j] === assetId) { out.push(all[i]); break; }
+      }
+    }
+    return out;
+  }
+
+  /* -> { explicit:[proc], implicit:[proc] } */
+  function procsForPoint(assetId, pointId) {
+    var scoped = procsForAsset(assetId), out = { explicit: [], implicit: [] }, i, j;
+    for (i = 0; i < scoped.length; i++) {
+      var pts = scoped[i].isolationPointIds;
+      if (pts === null || pts === undefined) { out.implicit.push(scoped[i]); continue; }
+      for (j = 0; j < pts.length; j++) {
+        if (pts[j] === pointId) { out.explicit.push(scoped[i]); break; }
+      }
+    }
+    return out;
+  }
+
+  function childrenOf(parentId) {
+    var all = assets(), out = [], i;
+    for (i = 0; i < all.length; i++) {
+      if ((all[i].parentId || null) === parentId) { out.push(all[i]); }
+    }
+    return out;
+  }
+
+  function descendantsOf(id) {
+    var out = [], stack = childrenOf(id), i;
+    while (stack.length) {
+      var a = stack.pop();
+      out.push(a);
+      var kids = childrenOf(a.id);
+      for (i = 0; i < kids.length; i++) { stack.push(kids[i]); }
+    }
+    return out;
+  }
+
+  function listOf(items, render) {
+    var ul = E('ul', { class: 'ar-reflist' }), i;
+    for (i = 0; i < items.length; i++) { ul.appendChild(E('li', null, render(items[i]))); }
+    return ul;
+  }
+
   /* -------------------------------------------------------------- scoped style */
 
   var CSS = [
@@ -193,15 +251,17 @@
     '.loto-ar .ar-card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;',
       'margin-bottom:8px;display:flex;gap:12px;align-items:flex-start}',
     '.loto-ar .ar-card:hover{border-color:var(--amber)}',
+    '.loto-ar .ar-card.ar-child{border-left:3px solid var(--line-dark)}',
     '.loto-ar .ar-card .ar-main{flex:1;min-width:0}',
     '.loto-ar .ar-num{font-family:var(--mono);font-weight:600;color:var(--ink)}',
+    '.loto-ar .ar-kid{font-size:11px;color:var(--muted);margin-left:6px}',
     '.loto-ar .ar-desc{color:var(--ink);margin:2px 0 6px}',
     '.loto-ar .ar-meta{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}',
     '.loto-ar .ar-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}',
     '.loto-ar .ar-chip{font-size:11px;border:1px solid var(--line);border-radius:10px;',
       'padding:1px 8px;white-space:nowrap}',
     '.loto-ar .ar-due{color:var(--fail);font-weight:600}',
-    '.loto-ar .ar-acts{display:flex;gap:6px;flex-shrink:0}',
+    '.loto-ar .ar-acts{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}',
     '.loto-ar .ar-pt{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px}',
     '.loto-ar .ar-pt-head{display:flex;gap:8px;align-items:center;margin-bottom:10px}',
     '.loto-ar .ar-pt-seq{font-family:var(--mono);font-weight:600;background:var(--card);',
@@ -214,7 +274,9 @@
     '.loto-ar .ar-lockrow{display:flex;gap:8px;align-items:center;margin-bottom:6px}',
     '.loto-ar .ar-lockrow input[type=number]{width:80px}',
     '.loto-ar .ar-foot{display:flex;gap:8px;margin-top:16px;padding-top:14px;',
-      'border-top:1px solid var(--line)}'
+      'border-top:1px solid var(--line)}',
+    '.loto-ar .ar-reflist{margin:6px 0 12px;padding-left:20px}',
+    '.loto-ar .ar-reflist li{margin-bottom:3px}'
   ].join('');
 
   /* ================================================================== the tab */
@@ -222,15 +284,15 @@
   SH.registerTab(PAGE, TAB, {
 
     mount: function (host, ctx) {
-      this._host    = host;
-      this._mode    = 'list';        /* list | form */
-      this._draft   = null;
-      this._isNew   = false;
-      this._newAssets = [];          /* relPaths written this editing session */
-      this._urls    = [];            /* blob URLs to revoke */
-      this._filter  = '';
-      this._writing = false;
-      this._pending = false;
+      this._host      = host;
+      this._mode      = 'list';        /* list | form */
+      this._draft     = null;
+      this._isNew     = false;
+      this._newAssets = [];            /* relPaths written this editing session */
+      this._urls      = [];            /* blob URLs to revoke */
+      this._filter    = '';
+      this._writing   = false;
+      this._pending   = false;
 
       host.classList.add('loto-ar');
       host.appendChild(E('style', { html: CSS }));
@@ -249,10 +311,7 @@
     },
 
     onShow: function () {
-      if (this._mode === 'list' || this._pending) {
-        this._pending = false;
-        if (this._mode === 'list') { this._render(); }
-      }
+      if (this._mode === 'list') { this._pending = false; this._render(); }
     },
 
     unmount: function () {
@@ -291,62 +350,71 @@
     _toolbar: function () {
       var self = this;
       var seg  = box('ar-seg');
-      var view = E('button', { class: this._mode === 'list' ? 'on' : '', onClick: function () {
+      seg.appendChild(E('button', { class: this._mode === 'list' ? 'on' : '', onClick: function () {
         if (self._mode === 'form') { self._confirmDiscard(function () { self._toList(); }); }
         else { self._toList(); }
-      } }, 'View');
-      var add  = E('button', { class: this._mode === 'form' ? 'on' : '', onClick: function () {
+      } }, 'View'));
+      seg.appendChild(E('button', { class: this._mode === 'form' ? 'on' : '', onClick: function () {
         if (self._mode === 'form') { return; }
         self._openForm(null);
-      } }, 'Add');
-      seg.appendChild(view); seg.appendChild(add);
+      } }, 'Add'));
 
       var bar = box('ar-bar', seg);
 
       if (this._mode === 'list') {
-        var search = input('search', this._filter, function (v) {
+        bar.appendChild(input('search', this._filter, function (v) {
           self._filter = v;
           self._applyFilter();
-        }, { class: 'ar-search', placeholder: 'Filter by asset, description or procedure…' });
-        bar.appendChild(search);
+        }, { class: 'ar-search', placeholder: 'Filter by asset, description or procedure…' }));
         bar.appendChild(E('span', { class: 'hint' }, assets().length + ' asset(s)'));
       }
       return bar;
     },
 
     _toList: function () {
-      this._mode  = 'list';
-      this._draft = null;
+      this._mode      = 'list';
+      this._draft     = null;
       this._newAssets = [];
       this._render();
     },
 
-    /* ------------------------------------------------------------------- list */
+    /* --------------------------------------------------------- list (as tree) */
 
     _list: function () {
-      var self = this;
       var wrap = box('');
       var all  = assets();
 
       if (!all.length) {
         wrap.appendChild(E('div', { class: 'ar-empty' },
-          'No assets registered yet. Use Add to create the first LOTO procedure record.'));
+          'No assets registered yet. Use Add to create the first LOTO asset record.'));
         return wrap;
       }
 
-      this._rows = [];
+      this._cards = [];   /* [{el, id, parentId, search}] */
 
-      var groups = [], i, j;
-      var ars = areas();
-      for (i = 0; i < ars.length; i++) { groups.push({ id: ars[i].id, name: ars[i].name || ars[i].id, items: [] }); }
+      /* Only top-level assets are grouped by area; children hang off their parent
+         wherever that parent sits, so a machine and its motors stay together. */
+      var byId = {}, i, j;
+      for (i = 0; i < all.length; i++) { byId[all[i].id] = all[i]; }
+
+      var roots = [];
+      for (i = 0; i < all.length; i++) {
+        var pid = all[i].parentId || null;
+        if (!pid || !byId[pid]) { roots.push(all[i]); }   /* orphan -> treated as root */
+      }
+
+      var groups = [], ars = areas();
+      for (i = 0; i < ars.length; i++) {
+        groups.push({ id: ars[i].id, name: ars[i].name || ars[i].id, items: [] });
+      }
       var loose = { id: '', name: 'Unassigned', items: [] };
 
-      for (i = 0; i < all.length; i++) {
+      for (i = 0; i < roots.length; i++) {
         var placed = false;
         for (j = 0; j < groups.length; j++) {
-          if (groups[j].id === all[i].areaId) { groups[j].items.push(all[i]); placed = true; break; }
+          if (groups[j].id === roots[i].areaId) { groups[j].items.push(roots[i]); placed = true; break; }
         }
-        if (!placed) { loose.items.push(all[i]); }
+        if (!placed) { loose.items.push(roots[i]); }
       }
       groups.push(loose);
 
@@ -354,17 +422,23 @@
         if (!groups[i].items.length) { continue; }
         var g = box('ar-group', E('h3', null, groups[i].name));
         for (j = 0; j < groups[i].items.length; j++) {
-          g.appendChild(this._card(groups[i].items[j]));
+          this._branch(g, groups[i].items[j], 0);
         }
         wrap.appendChild(g);
       }
       return wrap;
     },
 
-    _card: function (a) {
-      var self = this;
+    _branch: function (host, asset, depth) {
+      host.appendChild(this._card(asset, depth));
+      var kids = childrenOf(asset.id);
+      for (var i = 0; i < kids.length; i++) { this._branch(host, kids[i], depth + 1); }
+    },
 
-      var energies = [], seen = {}, i;
+    _card: function (a, depth) {
+      var self = this, i;
+
+      var energies = [], seen = {};
       for (i = 0; i < (a.isolationPoints || []).length; i++) {
         var en = a.isolationPoints[i].energy;
         if (en && !seen[en]) { seen[en] = 1; energies.push(en); }
@@ -374,7 +448,7 @@
       for (i = 0; i < energies.length; i++) { chips.appendChild(energySwatch(energies[i])); }
 
       var meta = box('ar-meta');
-      if (a.procedureId)   { meta.appendChild(E('span', null, 'Procedure ' + a.procedureId)); }
+      if (a.procedureId) { meta.appendChild(E('span', null, 'Procedure ' + a.procedureId)); }
       meta.appendChild(E('span', null, (a.isolationPoints || []).length + ' lockout point(s)'));
       if (a.drawingRefs && a.drawingRefs.length) {
         meta.appendChild(E('span', null, 'Dwg ' + a.drawingRefs.join(', ')));
@@ -384,71 +458,166 @@
           'Next audit ' + a.nextAudit));
       }
       if (a.specialPrecaution) { meta.appendChild(E('span', null, 'Special precaution')); }
+      var refs = procsForAsset(a.id).length;
+      if (refs) { meta.appendChild(E('span', null, refs + ' procedure(s)')); }
 
-      var main = box('ar-main',
-        E('div', { class: 'ar-num' }, a.assetNumber || '(no asset number)'),
-        E('div', { class: 'ar-desc' }, a.description || ''),
-        meta);
+      var title = box('', E('span', { class: 'ar-num' }, a.assetNumber || '(no asset number)'));
+      var kidCount = childrenOf(a.id).length;
+      if (kidCount) { title.appendChild(E('span', { class: 'ar-kid' }, kidCount + ' sub-asset(s)')); }
+
+      var main = box('ar-main', title, E('div', { class: 'ar-desc' }, a.description || ''), meta);
       if (energies.length) { main.appendChild(chips); }
 
       var acts = box('ar-acts',
         btn('Edit', function () { self._openForm(a.id); }, 'ghost sm'),
+        btn('+ Sub-asset', function () { self._addSub(a); }, 'ghost sm'),
         btn('Duplicate', function () { self._duplicate(a); }, 'ghost sm'),
         btn('Delete', function () { self._confirmDelete(a); }, 'danger sm'));
 
-      var card = box('ar-card', main, acts);
-      card.setAttribute('data-search',
-        ((a.assetNumber || '') + ' ' + (a.description || '') + ' ' +
-         (a.procedureId || '') + ' ' + (a.procedureDesc || '')).toLowerCase());
-      this._rows.push(card);
+      var card = box('ar-card' + (depth ? ' ar-child' : ''), main, acts);
+      if (depth) { card.style.marginLeft = (depth * 22) + 'px'; }
+
+      var search = ((a.assetNumber || '') + ' ' + (a.description || '') + ' ' +
+                    (a.procedureId || '') + ' ' + (a.procedureDesc || '')).toLowerCase();
+      this._cards.push({ el: card, id: a.id, parentId: a.parentId || null, search: search });
       return card;
     },
 
+    /* Filtering a tree: show matches, then re-reveal every ancestor of a match so
+       a child never appears detached from its parent. */
     _applyFilter: function () {
-      var q = (this._filter || '').toLowerCase().trim();
-      var rows = this._rows || [], i;
-      for (i = 0; i < rows.length; i++) {
-        var hit = !q || (rows[i].getAttribute('data-search') || '').indexOf(q) !== -1;
-        rows[i].style.display = hit ? '' : 'none';
+      var q = trim(this._filter).toLowerCase();
+      var cards = this._cards || [], byId = {}, i;
+      for (i = 0; i < cards.length; i++) { byId[cards[i].id] = cards[i]; }
+
+      var show = {};
+      for (i = 0; i < cards.length; i++) {
+        if (!q || cards[i].search.indexOf(q) !== -1) {
+          show[cards[i].id] = true;
+          var p = cards[i].parentId;
+          while (p && byId[p] && !show[p]) { show[p] = true; p = byId[p].parentId; }
+        }
+      }
+      for (i = 0; i < cards.length; i++) {
+        cards[i].el.style.display = show[cards[i].id] ? '' : 'none';
       }
     },
 
     /* ---------------------------------------------------------------- actions */
 
+    _addSub: function (parent) {
+      var a = blankAsset();
+      a.parentId = parent.id;
+      a.areaId   = parent.areaId || '';
+      this._openForm(null, a);
+    },
+
     _duplicate: function (a) {
-      var copy = clone(a);
+      var copy = clone(a), i;
       copy.id = uid('ast_');
       copy.assetNumber = (copy.assetNumber || '') + ' (copy)';
       copy.photos = [];
-      for (var i = 0; i < (copy.isolationPoints || []).length; i++) {
+      /* Sub-assets are not copied; the duplicate lands as a sibling. New point ids
+         so no procedure can accidentally resolve to the copy. */
+      for (i = 0; i < (copy.isolationPoints || []).length; i++) {
         copy.isolationPoints[i].id = uid('ip_');
         copy.isolationPoints[i].photo = null;   /* photos are not copied on disk */
       }
       this._openForm(null, copy);
     },
 
+    /* ------------------------------------------------------------ delete guard */
+
     _confirmDelete: function (a) {
-      var self = this;
+      var self  = this;
+      var procs = procsForAsset(a.id);
+      var kids  = descendantsOf(a.id);
+
+      /* Blocked: a procedure document points at this asset. Deleting it would
+         leave a live LOTO procedure referencing nothing. */
+      if (procs.length) {
+        SH.modal('Cannot delete asset', box('',
+          E('p', null, '"' + (a.assetNumber || 'This asset') + '" cannot be deleted — ' +
+            procs.length + ' procedure(s) reference it:'),
+          listOf(procs, procTitle),
+          E('p', { class: 'hint' },
+            'Delete or re-point those procedures in LOTO › Procedures first.')
+        ), [{ label: 'OK', onClick: function (close) { close(); } }]);
+        return;
+      }
+
+      /* Children: a descendant may itself be referenced, so check the branch. */
+      var blockedKids = [], i;
+      for (i = 0; i < kids.length; i++) {
+        if (procsForAsset(kids[i].id).length) { blockedKids.push(kids[i]); }
+      }
+
       var body = box('',
         E('p', null, 'Delete "' + (a.assetNumber || 'this asset') + '"? ' +
-          'Its lockout points and photos are removed with it.'),
-        E('p', { class: 'hint' }, 'This cannot be undone.'));
-      SH.modal('Delete asset', body, [
-        { label: 'Cancel', ghost: true, onClick: function (close) { close(); } },
-        { label: 'Delete', onClick: function (close) { close(); self._deleteAsset(a); } }
-      ]);
+          'Its lockout points and photos are removed with it.'));
+
+      var actions = [{ label: 'Cancel', ghost: true, onClick: function (close) { close(); } }];
+
+      if (kids.length) {
+        body.appendChild(E('p', null, 'It has ' + kids.length + ' sub-asset(s):'));
+        body.appendChild(listOf(kids, function (k) {
+          return (k.assetNumber || '(no asset number)') +
+                 (procsForAsset(k.id).length ? '  — referenced by a procedure' : '');
+        }));
+        if (blockedKids.length) {
+          body.appendChild(E('div', { class: 'warnnote' },
+            blockedKids.length + ' sub-asset(s) are referenced by procedures and cannot be ' +
+            'deleted. Promote them instead, or clear those procedures first.'));
+        }
+        body.appendChild(E('p', { class: 'hint' },
+          'Promoting moves the sub-assets up a level and keeps their data.'));
+
+        actions.push({ label: 'Promote & delete parent', onClick: function (close) {
+          close(); self._deleteAsset(a, 'promote');
+        } });
+        if (!blockedKids.length) {
+          actions.push({ label: 'Delete whole branch', onClick: function (close) {
+            close(); self._deleteAsset(a, 'branch');
+          } });
+        }
+      } else {
+        body.appendChild(E('p', { class: 'hint' }, 'This cannot be undone.'));
+        actions.push({ label: 'Delete', onClick: function (close) {
+          close(); self._deleteAsset(a, 'promote');
+        } });
+      }
+
+      SH.modal('Delete asset', body, actions);
     },
 
-    _deleteAsset: function (a) {
-      var self = this;
-      var pts = a.isolationPoints || [], i;
-      for (i = 0; i < pts.length; i++) {
-        if (pts[i].photo && pts[i].photo.relPath) {
-          try { SH.store.deleteProjectAsset(pts[i].photo.relPath); } catch (e) {}
-        }
+    _deleteAsset: function (a, mode) {
+      var doomed = {}, i, j;
+      doomed[a.id] = true;
+
+      if (mode === 'branch') {
+        var kids = descendantsOf(a.id);
+        for (i = 0; i < kids.length; i++) { doomed[kids[i].id] = true; }
       }
+
       var list = assets(), out = [];
-      for (i = 0; i < list.length; i++) { if (list[i].id !== a.id) { out.push(list[i]); } }
+      for (i = 0; i < list.length; i++) {
+        var rec = list[i];
+        if (doomed[rec.id]) {
+          var pts = rec.isolationPoints || [];
+          for (j = 0; j < pts.length; j++) {
+            if (pts[j].photo && pts[j].photo.relPath) {
+              try { SH.store.deleteProjectAsset(pts[j].photo.relPath); } catch (e) {}
+            }
+          }
+          continue;
+        }
+        if (mode === 'promote' && rec.parentId === a.id) {
+          rec = clone(rec);
+          rec.parentId = a.parentId || null;   /* lift to the grandparent, or top level */
+        }
+        out.push(rec);
+      }
+
       this._commit(out);
       this._render();
     },
@@ -471,6 +640,7 @@
           if (list[i].id === id) { this._draft = clone(list[i]); this._isNew = false; break; }
         }
       }
+      if (this._draft.parentId === undefined) { this._draft.parentId = null; }
       this._newAssets = [];
       this._mode = 'form';
       this._render();
@@ -478,8 +648,7 @@
 
     _confirmDiscard: function (then) {
       var self = this;
-      var body = E('p', null, 'Discard the changes to this asset?');
-      SH.modal('Discard changes', body, [
+      SH.modal('Discard changes', E('p', null, 'Discard the changes to this asset?'), [
         { label: 'Keep editing', ghost: true, onClick: function (close) { close(); } },
         { label: 'Discard', onClick: function (close) {
             close();
@@ -496,16 +665,36 @@
       this._newAssets = [];
     },
 
+    /* Parent options exclude the asset itself and everything beneath it, so the
+       tree can never be given a cycle. */
+    _parentOptions: function () {
+      var d = this._draft, opts = [{ id: '', label: '— top level —' }];
+      var all = assets(), banned = {}, i;
+      banned[d.id] = true;
+      var kids = descendantsOf(d.id);
+      for (i = 0; i < kids.length; i++) { banned[kids[i].id] = true; }
+      for (i = 0; i < all.length; i++) {
+        if (banned[all[i].id]) { continue; }
+        opts.push({
+          id: all[i].id,
+          label: (all[i].assetNumber || '(no asset number)') +
+                 (all[i].description ? ' — ' + all[i].description : '')
+        });
+      }
+      return opts;
+    },
+
     _form: function () {
-      var self = this, d = this._draft;
+      var self = this, d = this._draft, i;
       var wrap = box('');
 
-      /* --- identification --- */
       var areaOpts = [{ id: '', label: '— unassigned —' }];
       var ars = areas();
-      for (var i = 0; i < ars.length; i++) { areaOpts.push({ id: ars[i].id, label: ars[i].name || ars[i].id }); }
+      for (i = 0; i < ars.length; i++) {
+        areaOpts.push({ id: ars[i].id, label: ars[i].name || ars[i].id });
+      }
 
-      var id1 = box('card',
+      wrap.appendChild(box('card',
         E('h2', { class: 'section' }, 'Identification'),
         box('grid2',
           field('Asset number', input('text', d.assetNumber, function (v) { d.assetNumber = v; },
@@ -514,6 +703,10 @@
             ars.length ? '' : 'No areas defined — add them in Risk Assessment › Areas & Assets.')),
         field('Asset description', input('text', d.description, function (v) { d.description = v; },
           { placeholder: 'LRS 1 Cooling Water' })),
+        field('Parent asset',
+          select(this._parentOptions(), d.parentId || '', function (v) { d.parentId = v || null; }),
+          'Nest this under a machine — e.g. a motor under the line it drives. ' +
+          'Leave at top level if it stands alone.'),
         box('grid2',
           field('Procedure ID', input('text', d.procedureId, function (v) { d.procedureId = v; },
             { placeholder: 'LOTO/00008' })),
@@ -523,15 +716,13 @@
           input('text', (d.drawingRefs || []).join(', '), function (v) {
             var parts = v.split(','), out = [], k;
             for (k = 0; k < parts.length; k++) {
-              var t = parts[k].replace(/^\s+|\s+$/g, '');
+              var t = trim(parts[k]);
               if (t) { out.push(t); }
             }
             d.drawingRefs = out;
           }, { placeholder: 'E19142, W18607' }),
-          'Comma separated.'));
-      wrap.appendChild(id1);
+          'Comma separated.')));
 
-      /* --- control --- */
       wrap.appendChild(box('card',
         E('h2', { class: 'section' }, 'Document control'),
         box('grid2',
@@ -541,7 +732,6 @@
           field('Approved by', input('text', d.approvedBy, function (v) { d.approvedBy = v; })),
           field('Authorised by', input('text', d.authorisedBy, function (v) { d.authorisedBy = v; })))));
 
-      /* --- precautions + lock devices --- */
       this._lockHost = box('');
       this._renderLocks();
       wrap.appendChild(box('card',
@@ -557,13 +747,13 @@
           self._renderLocks();
         }, 'ghost sm')));
 
-      /* --- isolation points --- */
       this._ptsHost = box('');
       this._renderPoints();
       wrap.appendChild(box('card',
         E('h2', { class: 'section' }, 'Lockout points'),
         E('div', { class: 'hint' },
-          'Listed in order. Verification steps are numbered in the same sequence as isolations.'),
+          'Listed in order. Procedures reference these points by id — reordering is safe, ' +
+          'deleting one is checked against the procedure register.'),
         this._ptsHost,
         btn('+ Lockout point', function () {
           d.isolationPoints = d.isolationPoints || [];
@@ -571,7 +761,6 @@
           self._renderPoints();
         }, 'ghost')));
 
-      /* --- footer --- */
       wrap.appendChild(box('ar-foot',
         btn('Save asset', function () { self._save(); }),
         btn('Cancel', function () { self._confirmDiscard(function () { self._toList(); }); }, 'ghost')));
@@ -589,24 +778,22 @@
       }
       for (var i = 0; i < locks.length; i++) {
         (function (idx) {
-          var row = box('ar-lockrow',
+          self._lockHost.appendChild(box('ar-lockrow',
             input('text', locks[idx].type, function (v) { locks[idx].type = v; },
               { placeholder: 'Padlock / Hasp / Ball valve device' }),
             input('number', locks[idx].qty, function (v) { locks[idx].qty = parseInt(v, 10) || 0; },
               { min: '0' }),
-            btn('Remove', function () { locks.splice(idx, 1); self._renderLocks(); }, 'ghost sm'));
-          self._lockHost.appendChild(row);
+            btn('Remove', function () { locks.splice(idx, 1); self._renderLocks(); }, 'ghost sm')));
         }(i));
       }
     },
 
     _renderPoints: function () {
-      var self = this, d = this._draft;
+      var d = this._draft;
       this._ptsHost.innerHTML = '';
       var pts = d.isolationPoints || [];
       if (!pts.length) {
-        this._ptsHost.appendChild(E('div', { class: 'ar-empty' },
-          'No lockout points yet.'));
+        this._ptsHost.appendChild(E('div', { class: 'ar-empty' }, 'No lockout points yet.'));
         return;
       }
       for (var i = 0; i < pts.length; i++) {
@@ -615,16 +802,15 @@
     },
 
     _pointCard: function (pts, idx) {
-      var self = this, p = pts[idx];
+      var self = this, p = pts[idx], i;
       p.seq = idx + 1;
 
       var kindOpts = [
         { id: 'isolation',    label: 'Isolation' },
         { id: 'verification', label: 'Verification' }
       ];
-      var enOpts = [];
-      var el = energyList();
-      for (var i = 0; i < el.length; i++) {
+      var enOpts = [], el = energyList();
+      for (i = 0; i < el.length; i++) {
         enOpts.push({ id: el[i].id, label: el[i].label || el[i].name || el[i].id });
       }
       if (!enOpts.length) { enOpts.push({ id: '', label: '(SH.LOTO_ENERGY not loaded)' }); }
@@ -643,7 +829,7 @@
           var t = pts[idx + 1]; pts[idx + 1] = pts[idx]; pts[idx] = t;
           self._renderPoints();
         }, 'ghost sm'),
-        btn('Remove', function () { self._removePoint(pts, idx); }, 'danger sm'));
+        btn('Remove', function () { self._confirmRemovePoint(pts, idx); }, 'danger sm'));
 
       var card = box('ar-pt', head,
         box('grid3',
@@ -668,8 +854,42 @@
       return card;
     },
 
+    /* A point may be referenced explicitly by id, or implicitly by a procedure
+       whose isolationPointIds is null (= every point on the asset). Both are real
+       references; only the explicit one is visible in the data. */
+    _confirmRemovePoint: function (pts, idx) {
+      var self = this, p = pts[idx];
+      var refs = this._isNew ? { explicit: [], implicit: [] }
+                             : procsForPoint(this._draft.id, p.id);
+
+      var body = box('',
+        E('p', null, 'Remove lockout point ' + p.seq +
+          (p.label ? ' (' + p.label + ')' : '') + '?'));
+
+      if (refs.explicit.length) {
+        body.appendChild(E('div', { class: 'warnnote' },
+          refs.explicit.length + ' procedure(s) name this point directly. Removing it leaves ' +
+          'those procedures referencing a point that no longer exists.'));
+        body.appendChild(listOf(refs.explicit, procTitle));
+      }
+      if (refs.implicit.length) {
+        body.appendChild(E('div', { class: 'warnnote' },
+          refs.implicit.length + ' procedure(s) include all points on this asset. This step ' +
+          'will disappear from them at the next print, with no other warning.'));
+        body.appendChild(listOf(refs.implicit, procTitle));
+      }
+      if (!refs.explicit.length && !refs.implicit.length) {
+        body.appendChild(E('p', { class: 'hint' },
+          'No procedure references this point. Its photo is deleted with it.'));
+      }
+
+      SH.modal('Remove lockout point', body, [
+        { label: 'Cancel', ghost: true, onClick: function (close) { close(); } },
+        { label: 'Remove', onClick: function (close) { close(); self._removePoint(pts, idx); } }
+      ]);
+    },
+
     _removePoint: function (pts, idx) {
-      var self = this;
       var p = pts[idx];
       if (p.photo && p.photo.relPath) {
         try { SH.store.deleteProjectAsset(p.photo.relPath); } catch (e) {}
@@ -680,7 +900,7 @@
 
     _photoRow: function (p) {
       var self = this;
-      var row = box('ar-photo');
+      var row    = box('ar-photo');
       var status = E('span', { class: 'hint' }, '');
 
       var file = E('input', { type: 'file', accept: 'image/*', style: 'display:none' });
@@ -692,6 +912,8 @@
           var name = jpgName(f.name);
           SH.store.saveProjectAsset('loto/' + self._draft.id, asFile(blob, name))
             .then(function (relPath) {
+              /* Same point id, new relPath — every procedure that renders this
+                 point picks up the new image with no further work. */
               if (p.photo && p.photo.relPath) {
                 try { SH.store.deleteProjectAsset(p.photo.relPath); } catch (e) {}
               }
@@ -705,7 +927,6 @@
         });
         file.value = '';
       });
-
       row.appendChild(file);
 
       if (p.photo && p.photo.relPath) {
@@ -717,7 +938,7 @@
         })['catch'](function () {});
         row.appendChild(img);
         row.appendChild(btn('Replace', function () { file.click(); }, 'ghost sm'));
-        row.appendChild(btn('Remove', function () {
+        row.appendChild(btn('Remove photo', function () {
           try { SH.store.deleteProjectAsset(p.photo.relPath); } catch (e) {}
           p.photo = null;
           self._renderPoints();
@@ -734,7 +955,7 @@
     _save: function () {
       var d = this._draft, i;
 
-      if (!d.assetNumber && !d.description) {
+      if (!trim(d.assetNumber) && !trim(d.description)) {
         SH.modal('Nothing to save',
           E('p', null, 'Give the asset a number or a description first.'),
           [{ label: 'OK', onClick: function (close) { close(); } }]);
@@ -743,6 +964,7 @@
 
       d.isolationPoints = d.isolationPoints || [];
       for (i = 0; i < d.isolationPoints.length; i++) { d.isolationPoints[i].seq = i + 1; }
+      if (d.parentId === '') { d.parentId = null; }
 
       var list = assets(), found = false, out = [];
       for (i = 0; i < list.length; i++) {
